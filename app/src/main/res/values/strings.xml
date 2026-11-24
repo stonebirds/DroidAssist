@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">DroidAssist</string>
+    <string name="accessibility_service_label">DroidAssist 远程控制</string>
+    <string name="accessibility_service_description">允许已确认的远程协助会话执行点击、滑动及系统导航操作。</string>
+</resources>

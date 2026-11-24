@@ -1,5 +1,7 @@
 # Android 远程协助项目交接文档
 
+> 历史文档：本文记录项目启动时的需求、方案和交接信息，其中的页面结构、阶段计划及“待实现”描述不代表当前代码状态。当前使用方法见 [`README.md`](../README.md)，现行架构见 [`ARCHITECTURE.md`](ARCHITECTURE.md)，实现结果见 [`IMPLEMENTATION.md`](IMPLEMENTATION.md)。
+
 ## 使用方式
 
 本文件用于将项目交接给 Mac mini 上的 Codex。

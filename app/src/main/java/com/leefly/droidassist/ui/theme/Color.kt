@@ -1,0 +1,31 @@
+package com.leefly.droidassist.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+val AssistGreen = Color(0xFF006A60)
+val AssistOnGreen = Color(0xFFFFFFFF)
+val AssistGreenContainer = Color(0xFF9EF2E4)
+val AssistOnGreenContainer = Color(0xFF00201C)
+val AssistSecondary = Color(0xFF4A635E)
+val AssistOnSecondary = Color(0xFFFFFFFF)
+val AssistSecondaryContainer = Color(0xFFCCE8E1)
+val AssistOnSecondaryContainer = Color(0xFF06201B)
+val AssistTertiary = Color(0xFF456179)
+val AssistBackground = Color(0xFFF8FAF9)
+val AssistOnBackground = Color(0xFF191C1B)
+val AssistSurfaceVariant = Color(0xFFDAE5E1)
+val AssistOutline = Color(0xFF6F7976)
+
+val AssistGreenDark = Color(0xFF82D5C8)
+val AssistOnGreenDark = Color(0xFF003731)
+val AssistGreenContainerDark = Color(0xFF005048)
+val AssistOnGreenContainerDark = Color(0xFF9EF2E4)
+val AssistSecondaryDark = Color(0xFFB1CCC5)
+val AssistOnSecondaryDark = Color(0xFF1C3530)
+val AssistSecondaryContainerDark = Color(0xFF334B46)
+val AssistOnSecondaryContainerDark = Color(0xFFCCE8E1)
+val AssistTertiaryDark = Color(0xFFACC8E4)
+val AssistBackgroundDark = Color(0xFF101413)
+val AssistOnBackgroundDark = Color(0xFFE0E3E1)
+val AssistSurfaceVariantDark = Color(0xFF3F4946)
+val AssistOutlineDark = Color(0xFF899390)
