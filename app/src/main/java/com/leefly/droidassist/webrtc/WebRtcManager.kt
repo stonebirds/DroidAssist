@@ -9,6 +9,7 @@ import com.leefly.droidassist.DiagnosticLog
 import com.leefly.droidassist.protocol.SignalEnvelope
 import com.leefly.droidassist.protocol.SignalType
 import com.leefly.droidassist.service.RemoteControlService
+import com.leefly.droidassist.service.ScreenShareService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.buildJsonObject
@@ -22,8 +23,8 @@ import java.nio.ByteBuffer
 
 private data class VideoQuality(
     val adaptive: Boolean = true,
-    val shortEdge: Int = 1080,
-    val fps: Int = 30,
+    val shortEdge: Int = 720,
+    val fps: Int = 20,
 )
 
 enum class WebRtcConnectionStatus {
@@ -171,7 +172,7 @@ object WebRtcManager {
                 }
             }
 
-            SignalType.HANGUP -> stopSession()
+            SignalType.HANGUP -> stopAfterRemoteHangup()
             else -> Unit
         }
     }
@@ -227,8 +228,22 @@ object WebRtcManager {
     }
 
     @Synchronized
+    fun hangUp() {
+        send(SignalType.HANGUP, buildJsonObject {})
+        val wasSharing = screenCapturer != null
+        releaseScreenCaptureResources()
+        stopSession()
+        if (wasSharing) application.stopService(Intent(application, ScreenShareService::class.java))
+    }
+
+    @Synchronized
     fun stopScreenCapture() {
         send(SignalType.HANGUP, buildJsonObject {})
+        releaseScreenCaptureResources()
+        stopSession()
+    }
+
+    private fun releaseScreenCaptureResources() {
         _isScreenSharing.value = false
         runCatching { screenCapturer?.stopCapture() }
         screenCapturer?.dispose()
@@ -240,7 +255,13 @@ object WebRtcManager {
         videoSource?.dispose()
         videoSource = null
         capturePermission = null
+    }
+
+    private fun stopAfterRemoteHangup() {
+        val wasSharing = screenCapturer != null
+        releaseScreenCaptureResources()
         stopSession()
+        if (wasSharing) application.stopService(Intent(application, ScreenShareService::class.java))
     }
 
     @Synchronized
@@ -251,6 +272,7 @@ object WebRtcManager {
         sessionId = null
         localDeviceId = null
         peerDeviceId = null
+        controlledRole = false
         updateStatus(WebRtcConnectionStatus.IDLE, "Session stopped")
     }
 

@@ -81,6 +81,7 @@ fun DroidAssistApp(
     onRespondToIncoming: (Boolean, Boolean) -> Unit,
     onRefresh: () -> Unit,
     onRevoke: (String) -> Unit,
+    onDisconnect: () -> Unit,
     onStopSharing: () -> Unit,
     onDismissMessage: () -> Unit,
 ) {
@@ -88,6 +89,10 @@ fun DroidAssistApp(
     var remoteControlOpen by rememberSaveable { mutableStateOf(false) }
     var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
     var trustController by rememberSaveable { mutableStateOf(false) }
+    var disconnectConfirmationVisible by rememberSaveable { mutableStateOf(false) }
+    var adaptiveQuality by rememberSaveable { mutableStateOf(true) }
+    var resolution by rememberSaveable { mutableIntStateOf(720) }
+    var frameRate by rememberSaveable { mutableIntStateOf(20) }
     val destination = MainDestination.entries[destinationIndex]
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -98,7 +103,39 @@ fun DroidAssistApp(
         }
     }
     LaunchedEffect(state.remoteVideoReady) {
-        if (state.remoteVideoReady) remoteControlOpen = true
+        if (state.remoteVideoReady) {
+            remoteControlOpen = true
+        } else {
+            remoteControlOpen = false
+            disconnectConfirmationVisible = false
+        }
+    }
+    LaunchedEffect(state.remoteVideoReady, adaptiveQuality, resolution, frameRate) {
+        if (state.remoteVideoReady) {
+            WebRtcManager.sendVideoQuality(adaptiveQuality, resolution, frameRate)
+        }
+    }
+
+    if (disconnectConfirmationVisible) {
+        AlertDialog(
+            onDismissRequest = { disconnectConfirmationVisible = false },
+            icon = { Icon(Icons.Outlined.StopCircle, contentDescription = null) },
+            title = { Text("结束远程协助？") },
+            text = { Text("断开后双方的远程画面和控制会立即停止。") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        disconnectConfirmationVisible = false
+                        remoteControlOpen = false
+                        onDisconnect()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("结束协助") }
+            },
+            dismissButton = {
+                TextButton(onClick = { disconnectConfirmationVisible = false }) { Text("取消") }
+            },
+        )
     }
 
     state.incomingSession?.let { incoming ->
@@ -136,7 +173,16 @@ fun DroidAssistApp(
     }
 
     if (remoteControlOpen && state.remoteVideoReady) {
-        RemoteControlScreen(onClose = { remoteControlOpen = false })
+        RemoteControlScreen(
+            adaptiveQuality = adaptiveQuality,
+            resolution = resolution,
+            frameRate = frameRate,
+            onAdaptiveQualityChange = { adaptiveQuality = it },
+            onResolutionChange = { resolution = it },
+            onFrameRateChange = { frameRate = it },
+            onClose = { remoteControlOpen = false },
+            onRequestDisconnect = { disconnectConfirmationVisible = true },
+        )
         return
     }
 
@@ -185,6 +231,7 @@ fun DroidAssistApp(
                     onRefresh = onRefresh,
                     onRevoke = onRevoke,
                     onOpenRemoteControl = { remoteControlOpen = true },
+                    onDisconnect = { disconnectConfirmationVisible = true },
                 )
                 MainDestination.THIS_DEVICE -> ThisDeviceTab(
                     state = state,
@@ -276,6 +323,7 @@ private fun DevicesTab(
     onRefresh: () -> Unit,
     onRevoke: (String) -> Unit,
     onOpenRemoteControl: () -> Unit,
+    onDisconnect: () -> Unit,
 ) {
     val context = LocalContext.current
     var remoteCode by rememberSaveable { mutableStateOf("") }
@@ -308,7 +356,14 @@ private fun DevicesTab(
                         Text("远程屏幕已连接", fontWeight = FontWeight.SemiBold)
                         Text("WebRTC P2P", style = MaterialTheme.typography.bodySmall)
                     }
-                    Button(onClick = onOpenRemoteControl) { Text("打开") }
+                    Button(
+                        onClick = onOpenRemoteControl,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    ) { Text("打开") }
+                    OutlinedButton(
+                        onClick = onDisconnect,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    ) { Text("断开") }
                 }
             }
         }
@@ -649,14 +704,17 @@ private fun RemoteVideo(modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RemoteControlScreen(onClose: () -> Unit) {
+private fun RemoteControlScreen(
+    adaptiveQuality: Boolean,
+    resolution: Int,
+    frameRate: Int,
+    onAdaptiveQualityChange: (Boolean) -> Unit,
+    onResolutionChange: (Int) -> Unit,
+    onFrameRateChange: (Int) -> Unit,
+    onClose: () -> Unit,
+    onRequestDisconnect: () -> Unit,
+) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
-    var adaptiveQuality by rememberSaveable { mutableStateOf(true) }
-    var resolution by rememberSaveable { mutableIntStateOf(1080) }
-    var frameRate by rememberSaveable { mutableIntStateOf(30) }
-    LaunchedEffect(adaptiveQuality, resolution, frameRate) {
-        WebRtcManager.sendVideoQuality(adaptiveQuality, resolution, frameRate)
-    }
     BackHandler {
         if (controlsVisible) controlsVisible = false else onClose()
     }
@@ -724,7 +782,7 @@ private fun RemoteControlScreen(onClose: () -> Unit) {
                     listOf(true to "自适应", false to "手动").forEachIndexed { index, item ->
                         SegmentedButton(
                             selected = adaptiveQuality == item.first,
-                            onClick = { adaptiveQuality = item.first },
+                            onClick = { onAdaptiveQualityChange(item.first) },
                             shape = SegmentedButtonDefaults.itemShape(index, 2),
                         ) {
                             Text(item.second, maxLines = 1)
@@ -743,7 +801,7 @@ private fun RemoteControlScreen(onClose: () -> Unit) {
                     listOf(720, 1080).forEach { value ->
                         FilterChip(
                             selected = resolution == value,
-                            onClick = { resolution = value },
+                            onClick = { onResolutionChange(value) },
                             label = { Text("${value}p", maxLines = 1) },
                             modifier = Modifier.weight(1f),
                         )
@@ -754,7 +812,7 @@ private fun RemoteControlScreen(onClose: () -> Unit) {
                     listOf(10, 15, 20, 30).forEach { value ->
                         FilterChip(
                             selected = frameRate == value,
-                            onClick = { frameRate = value },
+                            onClick = { onFrameRateChange(value) },
                             label = { Text("$value", maxLines = 1) },
                             modifier = Modifier.weight(1f),
                         )
@@ -766,6 +824,18 @@ private fun RemoteControlScreen(onClose: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 HorizontalDivider()
+                Button(
+                    onClick = {
+                        controlsVisible = false
+                        onRequestDisconnect()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Icon(Icons.Outlined.StopCircle, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("结束并断开协助")
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     TextButton(onClick = { controlsVisible = false }) { Text("收起控制") }
                     OutlinedButton(onClick = onClose) {

@@ -2,18 +2,18 @@
 
 DroidAssist 是一套 Android 对 Android 的远程协助工具，支持实时查看屏幕、点击、长按、滑动，以及返回、Home 和最近任务操作。同一个 APK 同时支持协助端和被协助端。
 
-当前版本：`1.1.2`。Android 最低版本为 Android 8.0 / API 26，目标版本为 API 36。
+当前版本：`1.1.3`。Android 最低版本为 Android 8.0 / API 26，目标版本为 API 36。
 
 ## 普通用户：下载后直接使用
 
 不需要安装 Java、Android Studio、Git、Gradle 或编写代码。
 
 1. 打开 [GitHub Releases](https://github.com/stonebirds/DroidAssist/releases/latest)。
-2. 在两台 Android 手机上安装 `DroidAssist-1.1.2-release.apk`。
+2. 在两台 Android 手机上安装 `DroidAssist-1.1.3-release.apk`。
 3. 根据电脑下载一个服务包：
-   - Apple 芯片 Mac：`DroidAssist-Server-macOS-arm64-1.1.2.zip`
-   - Intel 芯片 Mac：`DroidAssist-Server-macOS-x64-1.1.2.zip`
-   - 64 位 Windows：`DroidAssist-Server-Windows-x64-1.1.2.zip`
+   - Apple 芯片 Mac：`DroidAssist-Server-macOS-arm64-1.1.3.zip`
+   - Intel 芯片 Mac：`DroidAssist-Server-macOS-x64-1.1.3.zip`
+   - 64 位 Windows：`DroidAssist-Server-Windows-x64-1.1.3.zip`
 4. 完整解压服务包，双击 `1-Start-DroidAssist` 开头的文件。
 5. 浏览器会自动显示服务器地址和离线生成的二维码。在两台手机的“设置”页点击扫码图标，然后点击“注册本机”。
 6. 使用结束后回到解压目录停止电脑服务：
@@ -54,7 +54,7 @@ DroidAssist 是一套 Android 对 Android 的远程协助工具，支持实时�
 - 设备注册和 9 位匹配码。
 - 临时授权、永久授权、可信设备和撤销授权。
 - 最近连接匹配码本地保存。
-- 竖屏扫码或从相册识别服务器二维码，以及完整授权信息复制和剪贴板解析。
+- 竖屏扫码或使用离线模型从相册识别单个/多个服务器二维码，以及完整授权信息复制和剪贴板解析。
 - WebSocket 长连接实时通知，无业务轮询。
 - WebSocket 短暂离线时有界暂存关键 WebRTC 信令，重连后按顺序补发。
 - MediaProjection 整屏捕获和前台共享服务。
@@ -62,7 +62,7 @@ DroidAssist 是一套 Android 对 Android 的远程协助工具，支持实时�
 - 点击、长按、滑动、返回、Home 和最近任务。
 - 独立远控画面及可收起的底部控制面板。
 - 默认网络自适应画质，并支持 720p/1080p 与 10/15/20/30 fps 手动组合。
-- 主动停止共享、对端挂断和资源清理。
+- 协助端主动断开、被协助端停止共享、对端挂断和双端资源清理。
 - macOS 与 Windows 免开发环境便携服务包。
 - Cloudflare Quick Tunnel 限流识别、分段重试和明确的恢复提示。
 - 设置页内置持久化诊断日志，可一键复制且不会记录令牌、密码、SDP 或 ICE 地址。

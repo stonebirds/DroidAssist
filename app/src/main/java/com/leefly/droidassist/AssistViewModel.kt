@@ -12,6 +12,7 @@ import com.leefly.droidassist.protocol.*
 import com.leefly.droidassist.webrtc.WebRtcManager
 import com.leefly.droidassist.webrtc.WebRtcConnectionStatus
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -23,6 +24,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -158,7 +160,9 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
             ConnectRequest(current.deviceId, normalizedCode, password.trim().uppercase(), identity.publicKey()),
         )
         rememberMatchingCode(normalizedCode)
-        WebRtcManager.configureController(response.sessionId, current.deviceId, response.controlledDeviceId)
+        withContext(Dispatchers.Default) {
+            WebRtcManager.configureController(response.sessionId, current.deviceId, response.controlledDeviceId)
+        }
         _state.update { it.copy(message = "连接请求已发送，会话 ${response.sessionId.take(8)} 等待对方确认") }
     }
 
@@ -186,7 +190,9 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
             }.onSuccess { response ->
                 if (response.status == SessionStatus.APPROVED) {
                     DiagnosticLog.info("Session", "Session ${response.sessionId.take(8)} approved; configuring controlled role")
-                    WebRtcManager.configureControlled(response.sessionId, _state.value.deviceId, response.peerDeviceId)
+                    withContext(Dispatchers.Default) {
+                        WebRtcManager.configureControlled(response.sessionId, _state.value.deviceId, response.peerDeviceId)
+                    }
                     if (WebRtcManager.connectionStatus.value == WebRtcConnectionStatus.WAITING_FOR_CAPTURE) {
                         _screenCaptureRequests.tryEmit(Unit)
                     }
@@ -215,6 +221,20 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
         api.revoke(_state.value.serverUrl, token(), peerId)
         val response = api.management(_state.value.serverUrl, token())
         _state.update { it.copy(management = response, message = "授权已撤销") }
+    }
+
+    fun disconnect() {
+        DiagnosticLog.info("Session", "User ended remote assistance")
+        viewModelScope.launch(Dispatchers.Default) {
+            WebRtcManager.hangUp()
+            _state.update {
+                it.copy(
+                    remoteVideoReady = false,
+                    isScreenSharing = false,
+                    message = "远程协助已断开",
+                )
+            }
+        }
     }
 
     private suspend fun token(): String = getApplication<Application>().dataStore.data.first()[tokenKey]
@@ -260,7 +280,9 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 _state.update { it.copy(message = message) }
             }
-            else -> WebRtcManager.handleSignal(signal)
+            else -> withContext(Dispatchers.Default) {
+                WebRtcManager.handleSignal(signal)
+            }
         }
     }
 

@@ -99,6 +99,7 @@ private fun DroidAssistRoot(viewModel: AssistViewModel = viewModel()) {
             onRespondToIncoming = viewModel::respondToIncoming,
             onRefresh = viewModel::refreshManagement,
             onRevoke = viewModel::revoke,
+            onDisconnect = viewModel::disconnect,
             onStopSharing = { context.startService(ScreenShareService.stopIntent(context)) },
             onDismissMessage = viewModel::clearMessage,
         )

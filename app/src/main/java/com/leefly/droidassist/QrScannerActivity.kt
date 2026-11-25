@@ -1,42 +1,45 @@
 package com.leefly.droidassist
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.animation.ValueAnimator
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.RectF
+import android.graphics.Shader
 import android.net.Uri
 import android.os.Bundle
 import android.util.AttributeSet
 import android.view.View
+import android.view.animation.LinearInterpolator
 import android.widget.ImageButton
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.InvertedLuminanceSource
-import com.google.zxing.MultiFormatReader
-import com.google.zxing.RGBLuminanceSource
-import com.google.zxing.Result
 import com.google.zxing.client.android.Intents
-import com.google.zxing.common.HybridBinarizer
+import com.google.mlkit.vision.barcode.BarcodeScanner
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import com.journeyapps.barcodescanner.CaptureActivity
 import com.journeyapps.barcodescanner.DecoratedBarcodeView
-import java.util.concurrent.Executors
-import kotlin.math.min
 
 class QrScannerActivity : CaptureActivity() {
     private lateinit var scanner: DecoratedBarcodeView
     private lateinit var torchButton: ImageButton
     private var torchEnabled = false
-    private val galleryExecutor = Executors.newSingleThreadExecutor()
+    private val galleryScanner: BarcodeScanner by lazy {
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build(),
+        )
+    }
 
     override fun initializeContent(): DecoratedBarcodeView {
         setContentView(R.layout.activity_qr_scanner)
@@ -66,24 +69,31 @@ class QrScannerActivity : CaptureActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_GALLERY || resultCode != Activity.RESULT_OK) return
-        val uri = data?.data ?: return
-        Toast.makeText(this, "正在识别相册二维码", Toast.LENGTH_SHORT).show()
-        galleryExecutor.execute {
-            val result = runCatching { decodeGalleryQr(uri) }
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                result.getOrNull()?.let(::returnResult) ?: Toast.makeText(
-                    this,
-                    "未识别到二维码，请选择清晰的原图",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            }
+        if (requestCode != REQUEST_GALLERY) return
+        if (resultCode != Activity.RESULT_OK) {
+            scanner.resume()
+            return
         }
+        val uri = data?.data ?: run {
+            scanner.resume()
+            return
+        }
+        scanner.pause()
+        Toast.makeText(this, "正在识别相册二维码", Toast.LENGTH_SHORT).show()
+        val image = runCatching { InputImage.fromFilePath(this, uri) }.getOrElse {
+            showGalleryDecodeFailure()
+            return
+        }
+        galleryScanner.process(image)
+            .addOnSuccessListener(::handleGalleryBarcodes)
+            .addOnFailureListener {
+                DiagnosticLog.error("Scanner", "Unable to recognize QR code from gallery", it)
+                showGalleryDecodeFailure()
+            }
     }
 
     override fun onDestroy() {
-        galleryExecutor.shutdownNow()
+        galleryScanner.close()
         super.onDestroy()
     }
 
@@ -100,6 +110,7 @@ class QrScannerActivity : CaptureActivity() {
     }
 
     private fun openGallery() {
+        scanner.pause()
         startActivityForResult(
             Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -109,65 +120,67 @@ class QrScannerActivity : CaptureActivity() {
         )
     }
 
-    private fun decodeGalleryQr(uri: Uri): Result {
-        val bitmap = loadSampledBitmap(uri)
-        return try {
-            val pixels = IntArray(bitmap.width * bitmap.height)
-            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-            val source = RGBLuminanceSource(bitmap.width, bitmap.height, pixels)
-            val reader = MultiFormatReader().apply {
-                setHints(
-                    mapOf(
-                        DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                        DecodeHintType.TRY_HARDER to true,
-                    ),
-                )
+    private fun handleGalleryBarcodes(barcodes: List<Barcode>) {
+        if (isFinishing || isDestroyed) return
+        val values = barcodes
+            .mapNotNull { it.rawValue?.trim()?.takeIf(String::isNotEmpty) }
+            .distinct()
+            .sortedByDescending(::isWebAddress)
+        when (values.size) {
+            0 -> showGalleryDecodeFailure()
+            1 -> returnGalleryResult(values.first())
+            else -> showBarcodeSelection(values)
+        }
+    }
+
+    private fun showBarcodeSelection(values: List<String>) {
+        DiagnosticLog.info("Scanner", "${values.size} QR codes recognized from gallery")
+        AlertDialog.Builder(this)
+            .setTitle("选择要使用的二维码")
+            .setItems(values.map(::barcodeLabel).toTypedArray()) { _, index ->
+                returnGalleryResult(values[index])
             }
-            runCatching { reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))) }
-                .recoverCatching {
-                    reader.reset()
-                    reader.decodeWithState(BinaryBitmap(HybridBinarizer(InvertedLuminanceSource(source))))
-                }
-                .getOrThrow()
-        } finally {
-            bitmap.recycle()
-        }
+            .setNegativeButton("取消") { _, _ -> scanner.resume() }
+            .setOnCancelListener { scanner.resume() }
+            .show()
     }
 
-    private fun loadSampledBitmap(uri: Uri): Bitmap {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri).use { stream ->
-            requireNotNull(stream) { "Unable to open selected image" }
-            BitmapFactory.decodeStream(stream, null, bounds)
+    private fun barcodeLabel(value: String): String {
+        val uri = runCatching { Uri.parse(value) }.getOrNull()
+        val title = if (isWebAddress(value)) {
+            "服务器地址 · ${uri?.host.orEmpty()}"
+        } else {
+            "二维码内容"
         }
-        var sampleSize = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / sampleSize > MAX_IMAGE_EDGE) {
-            sampleSize *= 2
-        }
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-        return contentResolver.openInputStream(uri).use { stream ->
-            requireNotNull(stream) { "Unable to reopen selected image" }
-            requireNotNull(BitmapFactory.decodeStream(stream, null, options)) { "Unable to decode selected image" }
-        }
+        val singleLine = value.replace(Regex("\\s+"), " ")
+        val summary = if (singleLine.length > 72) singleLine.take(69) + "..." else singleLine
+        return "$title\n$summary"
     }
 
-    private fun returnResult(result: Result) {
+    private fun isWebAddress(value: String): Boolean {
+        val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return false
+        return uri.scheme in setOf("http", "https") && !uri.host.isNullOrBlank()
+    }
+
+    private fun showGalleryDecodeFailure() {
+        if (isFinishing || isDestroyed) return
+        Toast.makeText(this, "未识别到二维码，请选择清晰的原图", Toast.LENGTH_SHORT).show()
+        scanner.resume()
+    }
+
+    private fun returnGalleryResult(value: String) {
         DiagnosticLog.info("Scanner", "QR code recognized from gallery")
         setResult(
             Activity.RESULT_OK,
             Intent(Intents.Scan.ACTION)
-                .putExtra(Intents.Scan.RESULT, result.text)
-                .putExtra(Intents.Scan.RESULT_FORMAT, result.barcodeFormat.toString()),
+                .putExtra(Intents.Scan.RESULT, value)
+                .putExtra(Intents.Scan.RESULT_FORMAT, "QR_CODE"),
         )
         finish()
     }
 
     companion object {
         private const val REQUEST_GALLERY = 4201
-        private const val MAX_IMAGE_EDGE = 2048
     }
 }
 
@@ -176,43 +189,50 @@ class QrScanOverlayView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
     private val density = resources.displayMetrics.density
-    private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x66000000 }
-    private val cornerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        style = Paint.Style.STROKE
-        strokeWidth = 3f * density
-        strokeCap = Paint.Cap.SQUARE
+    private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x3D000000 }
+    private val scanBandPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var scanProgress = 0f
+    private val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 2_600L
+        repeatCount = ValueAnimator.INFINITE
+        repeatMode = ValueAnimator.RESTART
+        interpolator = LinearInterpolator()
+        addUpdateListener {
+            scanProgress = it.animatedValue as Float
+            postInvalidateOnAnimation()
+        }
     }
-    private val scanPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xff51d7d0.toInt()
-        strokeWidth = 2f * density
-    }
-    private val frame = RectF()
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val frameSize = min(width * 0.72f, 280f * density)
-        val left = (width - frameSize) / 2f
-        val top = (height - frameSize) * 0.38f
-        val right = left + frameSize
-        val bottom = top + frameSize
-        frame.set(left, top, right, bottom)
-
-        canvas.drawRect(0f, 0f, width.toFloat(), top, maskPaint)
-        canvas.drawRect(0f, bottom, width.toFloat(), height.toFloat(), maskPaint)
-        canvas.drawRect(0f, top, left, bottom, maskPaint)
-        canvas.drawRect(right, top, width.toFloat(), bottom, maskPaint)
-
-        val corner = 28f * density
-        drawCorner(canvas, frame.left, frame.top, corner, 1f, 1f)
-        drawCorner(canvas, frame.right, frame.top, corner, -1f, 1f)
-        drawCorner(canvas, frame.left, frame.bottom, corner, 1f, -1f)
-        drawCorner(canvas, frame.right, frame.bottom, corner, -1f, -1f)
-        canvas.drawLine(left + corner, frame.centerY(), right - corner, frame.centerY(), scanPaint)
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), maskPaint)
+        val centerY = height * scanProgress
+        val halfHeight = 34f * density
+        scanBandPaint.shader = LinearGradient(
+            0f,
+            centerY - halfHeight,
+            0f,
+            centerY + halfHeight,
+            intArrayOf(
+                Color.TRANSPARENT,
+                0x2451D7D0,
+                0xB351D7D0.toInt(),
+                0x2451D7D0,
+                Color.TRANSPARENT,
+            ),
+            null,
+            Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, centerY - halfHeight, width.toFloat(), centerY + halfHeight, scanBandPaint)
     }
 
-    private fun drawCorner(canvas: Canvas, x: Float, y: Float, size: Float, xDirection: Float, yDirection: Float) {
-        canvas.drawLine(x, y, x + size * xDirection, y, cornerPaint)
-        canvas.drawLine(x, y, x, y + size * yDirection, cornerPaint)
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (!animator.isStarted) animator.start()
+    }
+
+    override fun onDetachedFromWindow() {
+        animator.cancel()
+        super.onDetachedFromWindow()
     }
 }
