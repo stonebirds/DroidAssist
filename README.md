@@ -2,18 +2,18 @@
 
 DroidAssist 是一套 Android 对 Android 的远程协助工具，支持实时查看屏幕、点击、长按、滑动，以及返回、Home 和最近任务操作。同一个 APK 同时支持协助端和被协助端。
 
-当前版本：`1.1.4`。Android 最低版本为 Android 8.0 / API 26，目标版本为 API 36。
+当前版本：`1.1.5`。Android 最低版本为 Android 8.0 / API 26，目标版本为 API 36。
 
 ## 普通用户：下载后直接使用
 
 不需要安装 Java、Android Studio、Git、Gradle 或编写代码。
 
 1. 打开 [GitHub Releases](https://github.com/stonebirds/DroidAssist/releases/latest)。
-2. 在两台 Android 手机上安装 `DroidAssist-1.1.4-release.apk`。
+2. 在两台 Android 手机上安装 `DroidAssist-1.1.5-release.apk`。
 3. 根据电脑下载一个服务包：
-   - Apple 芯片 Mac：`DroidAssist-Server-macOS-arm64-1.1.4.zip`
-   - Intel 芯片 Mac：`DroidAssist-Server-macOS-x64-1.1.4.zip`
-   - 64 位 Windows：`DroidAssist-Server-Windows-x64-1.1.4.zip`
+   - Apple 芯片 Mac：`DroidAssist-Server-macOS-arm64-1.1.5.zip`
+   - Intel 芯片 Mac：`DroidAssist-Server-macOS-x64-1.1.5.zip`
+   - 64 位 Windows：`DroidAssist-Server-Windows-x64-1.1.5.zip`
 4. 完整解压服务包，双击 `1-Start-DroidAssist` 开头的文件。
 5. 浏览器会自动显示服务器地址和离线生成的二维码。在两台手机的“设置”页点击扫码图标，然后点击“注册本机”。
 6. 使用结束后回到解压目录停止电脑服务：
@@ -68,6 +68,7 @@ DroidAssist 是一套 Android 对 Android 的远程协助工具，支持实时�
 - Cloudflare Quick Tunnel 限流识别、分段重试和明确的恢复提示。
 - 设置页内置持久化诊断日志，可一键复制且不会记录令牌、密码、SDP 或 ICE 地址。
 - 多 STUN 端点和 ICE 失败自动重启，降低弱网下首次连接失败概率。
+- 分离 ICE、视频首帧和控制通道状态；连接未真正就绪时禁用远控操作并显示对应阶段。
 
 ## 工程结构
 

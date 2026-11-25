@@ -9,8 +9,18 @@ import android.os.IBinder
 import android.util.Log
 import com.leefly.droidassist.DiagnosticLog
 import com.leefly.droidassist.webrtc.WebRtcManager
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ScreenShareService : Service() {
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val cleanupStarted = AtomicBoolean(false)
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             Log.i(TAG, "Stopping screen share service")
@@ -43,13 +53,20 @@ class ScreenShareService : Service() {
         }
         Log.i(TAG, "Passing full-screen capture permission to WebRTC")
         DiagnosticLog.info("Capture", "Passing capture permission to WebRTC")
-        WebRtcManager.provideScreenCapturePermission(data)
+        serviceScope.launch {
+            WebRtcManager.provideScreenCapturePermission(data)
+        }
     }
 
     private fun stopSharing() {
-        WebRtcManager.stopScreenCapture()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        if (!cleanupStarted.compareAndSet(false, true)) return
+        serviceScope.launch {
+            WebRtcManager.stopScreenCapture()
+            withContext(Dispatchers.Main.immediate) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
     }
 
     private fun createNotificationChannel() {
@@ -65,7 +82,17 @@ class ScreenShareService : Service() {
     )
 
     override fun onDestroy() {
-        WebRtcManager.stopScreenCapture()
+        if (WebRtcManager.isScreenSharing.value && cleanupStarted.compareAndSet(false, true)) {
+            serviceScope.launch {
+                try {
+                    WebRtcManager.stopScreenCapture()
+                } finally {
+                    serviceScope.cancel()
+                }
+            }
+        } else {
+            serviceScope.cancel()
+        }
         super.onDestroy()
     }
 

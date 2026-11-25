@@ -104,16 +104,22 @@ fun DroidAssistApp(
             onDismissMessage()
         }
     }
-    LaunchedEffect(state.remoteVideoReady) {
-        if (state.remoteVideoReady) {
+    LaunchedEffect(state.remoteVideoTrackAvailable, state.connectionStatus) {
+        if (
+            state.remoteVideoTrackAvailable &&
+            state.connectionStatus == WebRtcConnectionStatus.CONNECTED
+        ) {
             remoteControlOpen = true
-        } else {
+        } else if (
+            state.connectionStatus == WebRtcConnectionStatus.IDLE ||
+            state.connectionStatus == WebRtcConnectionStatus.FAILED
+        ) {
             remoteControlOpen = false
             disconnectConfirmationVisible = false
         }
     }
-    LaunchedEffect(state.remoteVideoReady, adaptiveQuality, resolution, frameRate) {
-        if (state.remoteVideoReady) {
+    LaunchedEffect(state.remoteVideoTrackAvailable, adaptiveQuality, resolution, frameRate) {
+        if (state.remoteVideoTrackAvailable) {
             WebRtcManager.sendVideoQuality(adaptiveQuality, resolution, frameRate)
         }
     }
@@ -186,8 +192,14 @@ fun DroidAssistApp(
         return
     }
 
-    if (remoteControlOpen && state.remoteVideoReady) {
+    if (
+        remoteControlOpen &&
+        state.remoteVideoTrackAvailable &&
+        state.connectionStatus == WebRtcConnectionStatus.CONNECTED
+    ) {
         RemoteControlScreen(
+            videoReady = state.remoteVideoReady,
+            controlChannelReady = state.controlChannelReady,
             adaptiveQuality = adaptiveQuality,
             resolution = resolution,
             frameRate = frameRate,
@@ -688,6 +700,9 @@ private fun rememberRemoteControlEnabled(): Boolean {
     val lifecycleOwner = LocalLifecycleOwner.current
     val serviceConnected by RemoteControlService.connectionState.collectAsState()
     var enabled by remember { mutableStateOf(isRemoteControlEnabled(context)) }
+    LaunchedEffect(serviceConnected) {
+        enabled = isRemoteControlEnabled(context)
+    }
     DisposableEffect(context, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) enabled = isRemoteControlEnabled(context)
@@ -720,6 +735,8 @@ private fun RemoteVideo(modifier: Modifier = Modifier) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RemoteControlScreen(
+    videoReady: Boolean,
+    controlChannelReady: Boolean,
     adaptiveQuality: Boolean,
     resolution: Int,
     frameRate: Int,
@@ -752,7 +769,20 @@ private fun RemoteControlScreen(
         }
         Box(videoModifier) {
             RemoteVideo(Modifier.fillMaxSize())
-            Box(Modifier.matchParentSize().remoteGestures())
+            if (controlChannelReady) {
+                Box(Modifier.matchParentSize().remoteGestures())
+            }
+            if (!videoReady) {
+                Column(
+                    Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.72f)),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(Modifier.height(12.dp))
+                    Text("正在等待远程画面首帧…", color = Color.White)
+                }
+            }
         }
         if (!controlsVisible) {
             FloatingActionButton(
@@ -778,22 +808,36 @@ private fun RemoteControlScreen(
             ) {
                 Column {
                     Text("远程控制", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Text("已连接", color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        when {
+                            !videoReady -> "画面连接中"
+                            !controlChannelReady -> "画面已连接，控制通道连接中"
+                            else -> "画面与控制已连接"
+                        },
+                        color = if (controlChannelReady) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     RemoteControlAction(
                         label = "返回",
                         icon = { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null) },
+                        enabled = controlChannelReady,
                         onClick = { WebRtcManager.sendGlobal("BACK") },
                     )
                     RemoteControlAction(
                         label = "主页",
                         icon = { Icon(Icons.Outlined.Home, contentDescription = null) },
+                        enabled = controlChannelReady,
                         onClick = { WebRtcManager.sendGlobal("HOME") },
                     )
                     RemoteControlAction(
                         label = "任务",
                         icon = { Icon(Icons.Outlined.Apps, contentDescription = null) },
+                        enabled = controlChannelReady,
                         onClick = { WebRtcManager.sendGlobal("RECENTS") },
                     )
                 }
@@ -804,6 +848,7 @@ private fun RemoteControlScreen(
                         SegmentedButton(
                             selected = adaptiveQuality == item.first,
                             onClick = { onAdaptiveQualityChange(item.first) },
+                            enabled = controlChannelReady,
                             shape = SegmentedButtonDefaults.itemShape(index, 2),
                         ) {
                             Text(item.second, maxLines = 1)
@@ -823,6 +868,7 @@ private fun RemoteControlScreen(
                         FilterChip(
                             selected = resolution == value,
                             onClick = { onResolutionChange(value) },
+                            enabled = controlChannelReady,
                             label = { Text("${value}p", maxLines = 1) },
                             modifier = Modifier.weight(1f),
                         )
@@ -834,6 +880,7 @@ private fun RemoteControlScreen(
                         FilterChip(
                             selected = frameRate == value,
                             onClick = { onFrameRateChange(value) },
+                            enabled = controlChannelReady,
                             label = { Text("$value", maxLines = 1) },
                             modifier = Modifier.weight(1f),
                         )
@@ -875,6 +922,7 @@ private fun RemoteControlScreen(
 private fun RowScope.RemoteControlAction(
     label: String,
     icon: @Composable () -> Unit,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     Column(
@@ -882,7 +930,7 @@ private fun RowScope.RemoteControlAction(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+        FilledTonalIconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(48.dp)) {
             icon()
         }
         Text(

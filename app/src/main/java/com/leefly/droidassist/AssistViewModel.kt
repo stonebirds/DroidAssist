@@ -40,7 +40,9 @@ data class AssistUiState(
     val recentMatchingCodes: List<String> = emptyList(),
     val grant: CreateGrantResponse? = null,
     val incomingSession: IncomingSessionResponse? = null,
+    val remoteVideoTrackAvailable: Boolean = false,
     val remoteVideoReady: Boolean = false,
+    val controlChannelReady: Boolean = false,
     val isScreenSharing: Boolean = false,
     val connectionStatus: WebRtcConnectionStatus = WebRtcConnectionStatus.IDLE,
     val management: ManagementResponse = ManagementResponse(emptyList(), emptyList()),
@@ -74,8 +76,27 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         viewModelScope.launch {
+            WebRtcManager.remoteVideoTrackAvailable.collect { available ->
+                _state.update { it.copy(remoteVideoTrackAvailable = available) }
+            }
+        }
+        viewModelScope.launch {
+            WebRtcManager.controlChannelReady.collect { ready ->
+                _state.update { it.copy(controlChannelReady = ready) }
+            }
+        }
+        viewModelScope.launch {
             WebRtcManager.connectionStatus.collect { status ->
-                _state.update { it.copy(connectionStatus = status) }
+                _state.update {
+                    it.copy(
+                        connectionStatus = status,
+                        message = if (status == WebRtcConnectionStatus.FAILED) {
+                            "远程连接失败。请切换网络；跨运营商或受限网络需要配置 TURN 服务"
+                        } else {
+                            it.message
+                        },
+                    )
+                }
             }
         }
         viewModelScope.launch {
@@ -230,6 +251,8 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
             _state.update {
                 it.copy(
                     remoteVideoReady = false,
+                    remoteVideoTrackAvailable = false,
+                    controlChannelReady = false,
                     isScreenSharing = false,
                     message = "远程协助已断开",
                 )
@@ -304,7 +327,7 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
     override fun onCleared() {
         signalJob?.cancel()
         outgoingSignals.close()
-        WebRtcManager.stopSession()
+        WebRtcManager.stopSessionAsync()
         api.close()
     }
 }

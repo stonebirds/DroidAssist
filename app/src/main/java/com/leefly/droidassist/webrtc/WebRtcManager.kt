@@ -24,6 +24,7 @@ import kotlinx.serialization.json.put
 import org.webrtc.*
 import org.json.JSONObject
 import java.nio.ByteBuffer
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 private data class VideoQuality(
@@ -53,6 +54,7 @@ object WebRtcManager {
     private var videoSource: VideoSource? = null
     private var localTrack: VideoTrack? = null
     private var remoteTrack: VideoTrack? = null
+    private var remoteRenderer: SurfaceViewRenderer? = null
     private var videoSender: RtpSender? = null
     private var dataChannel: DataChannel? = null
     private var capturePermission: Intent? = null
@@ -68,15 +70,22 @@ object WebRtcManager {
     private var captureQuality = VideoQuality()
     private val _remoteVideoReady = MutableStateFlow(false)
     val remoteVideoReady: StateFlow<Boolean> = _remoteVideoReady
+    private val _remoteVideoTrackAvailable = MutableStateFlow(false)
+    val remoteVideoTrackAvailable: StateFlow<Boolean> = _remoteVideoTrackAvailable
     private val _remoteAspectRatio = MutableStateFlow(9f / 16f)
     val remoteAspectRatio: StateFlow<Float> = _remoteAspectRatio
     private val _connectionStatus = MutableStateFlow(WebRtcConnectionStatus.IDLE)
     val connectionStatus: StateFlow<WebRtcConnectionStatus> = _connectionStatus
+    private val _controlChannelReady = MutableStateFlow(false)
+    val controlChannelReady: StateFlow<Boolean> = _controlChannelReady
     private val _isScreenSharing = MutableStateFlow(false)
     val isScreenSharing: StateFlow<Boolean> = _isScreenSharing
     private val _controlFeedback = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val controlFeedback: SharedFlow<String> = _controlFeedback.asSharedFlow()
     private val controlSequence = AtomicLong()
+    private val cleanupExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "DroidAssistWebRtcCleanup")
+    }
 
     @Synchronized
     fun initialize(context: Context, sender: (SignalEnvelope) -> Unit) {
@@ -171,6 +180,7 @@ object WebRtcManager {
                     payload["sdpMLineIndex"]?.jsonPrimitive?.int ?: return,
                     payload["candidate"]?.jsonPrimitive?.content ?: return,
                 )
+                DiagnosticLog.info("WebRTC", "Remote ICE candidate received (${candidateSummary(candidate.sdp)})")
                 val connection = peerConnection
                 if (connection == null || !remoteDescriptionSet) {
                     pendingRemoteIceCandidates += candidate
@@ -185,9 +195,11 @@ object WebRtcManager {
         }
     }
 
+    @Synchronized
     fun attachRenderer(renderer: SurfaceViewRenderer) {
         renderer.init(eglBase.eglBaseContext, object : RendererCommon.RendererEvents {
             override fun onFirstFrameRendered() {
+                _remoteVideoReady.value = true
                 DiagnosticLog.info("WebRTC", "First remote video frame rendered")
             }
             override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
@@ -202,12 +214,22 @@ object WebRtcManager {
         })
         renderer.setEnableHardwareScaler(true)
         renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+        remoteRenderer?.takeIf { it !== renderer }?.let { previous ->
+            remoteTrack?.removeSink(previous)
+        }
+        remoteRenderer = renderer
         remoteTrack?.addSink(renderer)
     }
 
     fun detachRenderer(renderer: SurfaceViewRenderer) {
-        remoteTrack?.removeSink(renderer)
-        renderer.release()
+        val track = synchronized(this) {
+            if (remoteRenderer === renderer) remoteRenderer = null
+            remoteTrack
+        }
+        cleanupExecutor.execute {
+            runCatching { track?.removeSink(renderer) }
+            runCatching { renderer.release() }
+        }
     }
 
     fun sendTap(x: Float, y: Float) = sendControl(
@@ -274,14 +296,16 @@ object WebRtcManager {
 
     @Synchronized
     fun stopSession() {
-        remoteTrack = null
-        _remoteVideoReady.value = false
         resetPeerConnection()
         sessionId = null
         localDeviceId = null
         peerDeviceId = null
         controlledRole = false
         updateStatus(WebRtcConnectionStatus.IDLE, "Session stopped")
+    }
+
+    fun stopSessionAsync() {
+        cleanupExecutor.execute(::stopSession)
     }
 
     private fun maybeStartScreenOffer() {
@@ -360,8 +384,13 @@ object WebRtcManager {
                 PeerConnection.IceConnectionState.CHECKING -> updateStatus(WebRtcConnectionStatus.CONNECTING, "ICE checking")
                 PeerConnection.IceConnectionState.CONNECTED,
                 PeerConnection.IceConnectionState.COMPLETED -> updateStatus(WebRtcConnectionStatus.CONNECTED, "ICE connected")
-                PeerConnection.IceConnectionState.DISCONNECTED -> updateStatus(WebRtcConnectionStatus.DISCONNECTED, "ICE disconnected")
+                PeerConnection.IceConnectionState.DISCONNECTED -> {
+                    _controlChannelReady.value = false
+                    updateStatus(WebRtcConnectionStatus.DISCONNECTED, "ICE disconnected")
+                }
                 PeerConnection.IceConnectionState.FAILED -> {
+                    _controlChannelReady.value = false
+                    _remoteVideoReady.value = false
                     if (controlledRole && iceRestartAttempts < 2) restartIce()
                     else updateStatus(WebRtcConnectionStatus.FAILED, "ICE failed")
                 }
@@ -374,7 +403,7 @@ object WebRtcManager {
             DiagnosticLog.info("WebRTC", "ICE gathering state: $state")
         }
         override fun onIceCandidate(candidate: IceCandidate) {
-            DiagnosticLog.info("WebRTC", "Local ICE candidate gathered")
+            DiagnosticLog.info("WebRTC", "Local ICE candidate gathered (${candidateSummary(candidate.sdp)})")
             send(
                 SignalType.ICE,
                 buildJsonObject {
@@ -395,10 +424,14 @@ object WebRtcManager {
         override fun onRenegotiationNeeded() = Unit
         override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out MediaStream>) {
             val track = receiver.track() as? VideoTrack ?: return
+            remoteTrack?.takeIf { it !== track }?.let { previous ->
+                remoteRenderer?.let(previous::removeSink)
+            }
             remoteTrack = track
-            _remoteVideoReady.value = true
+            _remoteVideoTrackAvailable.value = true
+            remoteRenderer?.let(track::addSink)
             Log.i(TAG, "Remote video track received")
-            DiagnosticLog.info("WebRTC", "Remote video track received")
+            DiagnosticLog.info("WebRTC", "Remote video track received; waiting for ICE and first frame")
         }
     }
 
@@ -446,6 +479,7 @@ object WebRtcManager {
             override fun onStateChange() {
                 Log.i(TAG, "Control channel: ${channel.state()}")
                 DiagnosticLog.info("Control", "Data channel state: ${channel.state()}")
+                _controlChannelReady.value = dataChannel === channel && channel.state() == DataChannel.State.OPEN
                 if (!controlledRole && channel.state() == DataChannel.State.OPEN) {
                     sendControl(qualityCommand(selectedQuality))
                 }
@@ -556,7 +590,12 @@ object WebRtcManager {
         if (channel == null || channel.state() != DataChannel.State.OPEN) {
             DiagnosticLog.warn("Control", "Unable to send $label: data channel is not open")
             if (json?.optString("type") != "quality") {
-                _controlFeedback.tryEmit("控制通道尚未就绪，请稍后重试")
+                val message = if (_connectionStatus.value == WebRtcConnectionStatus.FAILED) {
+                    "网络无法建立 P2P 连接，请切换网络或配置 TURN 服务"
+                } else {
+                    "控制通道正在连接，请稍后重试"
+                }
+                _controlFeedback.tryEmit(message)
             }
             return false
         }
@@ -610,6 +649,9 @@ object WebRtcManager {
     }
 
     private fun resetPeerConnection() {
+        _controlChannelReady.value = false
+        _remoteVideoReady.value = false
+        _remoteVideoTrackAvailable.value = false
         dataChannel?.close()
         dataChannel?.dispose()
         dataChannel = null
@@ -617,9 +659,19 @@ object WebRtcManager {
         peerConnection?.dispose()
         peerConnection = null
         videoSender = null
+        remoteTrack?.let { track -> remoteRenderer?.let(track::removeSink) }
+        remoteTrack = null
         remoteDescriptionSet = false
         pendingRemoteIceCandidates.clear()
         iceRestartAttempts = 0
+    }
+
+    private fun candidateSummary(candidate: String): String {
+        val fields = candidate.trim().split(Regex("\\s+"))
+        val protocol = fields.getOrNull(2)?.lowercase().orEmpty().ifBlank { "unknown" }
+        val typeIndex = fields.indexOfFirst { it.equals("typ", ignoreCase = true) }
+        val type = fields.getOrNull(typeIndex + 1).orEmpty().ifBlank { "unknown" }
+        return "type=$type, protocol=$protocol"
     }
 
     private fun markRemoteDescriptionSet(connection: PeerConnection) {
