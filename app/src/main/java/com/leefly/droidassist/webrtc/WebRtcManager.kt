@@ -8,10 +8,14 @@ import android.util.Log
 import com.leefly.droidassist.DiagnosticLog
 import com.leefly.droidassist.protocol.SignalEnvelope
 import com.leefly.droidassist.protocol.SignalType
+import com.leefly.droidassist.service.ControlExecutionResult
 import com.leefly.droidassist.service.RemoteControlService
 import com.leefly.droidassist.service.ScreenShareService
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
@@ -20,6 +24,7 @@ import kotlinx.serialization.json.put
 import org.webrtc.*
 import org.json.JSONObject
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicLong
 
 private data class VideoQuality(
     val adaptive: Boolean = true,
@@ -69,6 +74,9 @@ object WebRtcManager {
     val connectionStatus: StateFlow<WebRtcConnectionStatus> = _connectionStatus
     private val _isScreenSharing = MutableStateFlow(false)
     val isScreenSharing: StateFlow<Boolean> = _isScreenSharing
+    private val _controlFeedback = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    val controlFeedback: SharedFlow<String> = _controlFeedback.asSharedFlow()
+    private val controlSequence = AtomicLong()
 
     @Synchronized
     fun initialize(context: Context, sender: (SignalEnvelope) -> Unit) {
@@ -203,22 +211,22 @@ object WebRtcManager {
     }
 
     fun sendTap(x: Float, y: Float) = sendControl(
-        JSONObject().put("type", "tap").put("x", x).put("y", y).toString()
+        controlCommand("tap").put("x", x).put("y", y).toString()
     )
 
     fun sendLongPress(x: Float, y: Float, duration: Long) = sendControl(
-        JSONObject().put("type", "long_press").put("x", x).put("y", y).put("duration", duration)
+        controlCommand("long_press").put("x", x).put("y", y).put("duration", duration)
             .toString()
     )
 
     fun sendSwipe(fromX: Float, fromY: Float, toX: Float, toY: Float, duration: Long) = sendControl(
-        JSONObject().put("type", "swipe")
+        controlCommand("swipe")
             .put("fromX", fromX).put("fromY", fromY).put("toX", toX).put("toY", toY)
             .put("duration", duration).toString()
     )
 
     fun sendGlobal(action: String) = sendControl(
-        JSONObject().put("type", "global").put("action", action).toString()
+        controlCommand("global").put("action", action).toString()
     )
 
     @Synchronized
@@ -437,25 +445,35 @@ object WebRtcManager {
             override fun onBufferedAmountChange(previousAmount: Long) = Unit
             override fun onStateChange() {
                 Log.i(TAG, "Control channel: ${channel.state()}")
+                DiagnosticLog.info("Control", "Data channel state: ${channel.state()}")
                 if (!controlledRole && channel.state() == DataChannel.State.OPEN) {
                     sendControl(qualityCommand(selectedQuality))
                 }
             }
 
             override fun onMessage(buffer: DataChannel.Buffer) {
-                if (!controlledRole || buffer.binary) return
+                if (buffer.binary) return
                 val bytes = ByteArray(buffer.data.remaining())
                 buffer.data.get(bytes)
                 val command = bytes.toString(Charsets.UTF_8)
                 val json = runCatching { JSONObject(command) }.getOrNull()
-                if (json?.optString("type") == "quality") {
-                    applyVideoQuality(
-                        adaptive = json.optString("mode") == "adaptive",
-                        shortEdge = json.optInt("resolution", 1080),
-                        fps = json.optInt("fps", 30),
-                    )
-                } else {
-                    RemoteControlService.execute(command)
+                when (json?.optString("type")) {
+                    "control_result" -> if (!controlledRole) handleControlResult(json)
+                    "quality" -> if (controlledRole) {
+                        applyVideoQuality(
+                            adaptive = json.optString("mode") == "adaptive",
+                            shortEdge = json.optInt("resolution", 720),
+                            fps = json.optInt("fps", 20),
+                        )
+                    }
+                    null, "" -> DiagnosticLog.warn("Control", "Received malformed data channel message")
+                    else -> if (controlledRole) {
+                        val requestId = json.optLong("id")
+                        DiagnosticLog.info("Control", "Received ${controlLabel(json)} command")
+                        RemoteControlService.execute(command) { result ->
+                            sendControlResult(requestId, result)
+                        }
+                    }
                 }
             }
         })
@@ -527,15 +545,68 @@ object WebRtcManager {
     private fun qualityLabel(quality: VideoQuality): String =
         if (quality.adaptive) "adaptive" else "manual ${quality.shortEdge}p"
 
+    private fun controlCommand(type: String) = JSONObject()
+        .put("type", type)
+        .put("id", controlSequence.incrementAndGet())
+
     private fun sendControl(command: String): Boolean {
-        val channel = dataChannel ?: return false
-        if (channel.state() != DataChannel.State.OPEN) return false
-        return channel.send(
+        val json = runCatching { JSONObject(command) }.getOrNull()
+        val label = json?.let(::controlLabel) ?: "unknown"
+        val channel = dataChannel
+        if (channel == null || channel.state() != DataChannel.State.OPEN) {
+            DiagnosticLog.warn("Control", "Unable to send $label: data channel is not open")
+            if (json?.optString("type") != "quality") {
+                _controlFeedback.tryEmit("控制通道尚未就绪，请稍后重试")
+            }
+            return false
+        }
+        val sent = channel.send(
             DataChannel.Buffer(
                 ByteBuffer.wrap(command.toByteArray(Charsets.UTF_8)),
                 false
             )
         )
+        if (json?.optString("type") != "quality") {
+            if (sent) DiagnosticLog.info("Control", "Sent $label command")
+            else {
+                DiagnosticLog.warn("Control", "WebRTC rejected $label command")
+                _controlFeedback.tryEmit("控制指令发送失败，请检查连接")
+            }
+        }
+        return sent
+    }
+
+    private fun sendControlResult(requestId: Long, result: ControlExecutionResult) {
+        val payload = JSONObject()
+            .put("type", "control_result")
+            .put("id", requestId)
+            .put("command", result.commandType)
+            .put("action", result.action.orEmpty())
+            .put("success", result.success)
+            .put("reason", result.reason.orEmpty())
+            .toString()
+        val channel = dataChannel
+        if (channel == null || channel.state() != DataChannel.State.OPEN) {
+            DiagnosticLog.warn("Control", "Unable to acknowledge ${result.commandType}: data channel is not open")
+            return
+        }
+        channel.send(DataChannel.Buffer(ByteBuffer.wrap(payload.toByteArray(Charsets.UTF_8)), false))
+    }
+
+    private fun handleControlResult(result: JSONObject) {
+        val label = controlLabel(result, result.optString("command"))
+        if (result.optBoolean("success")) {
+            DiagnosticLog.info("Control", "Remote device executed $label command")
+        } else {
+            val reason = result.optString("reason").ifBlank { "被协助设备未执行控制操作" }
+            DiagnosticLog.warn("Control", "Remote device rejected $label command: $reason")
+            _controlFeedback.tryEmit(reason)
+        }
+    }
+
+    private fun controlLabel(json: JSONObject, fallbackType: String = "unknown"): String {
+        val type = json.optString("type").takeUnless { it == "control_result" }.orEmpty().ifBlank { fallbackType }
+        return if (type == "global") "$type ${json.optString("action")}" else type
     }
 
     private fun resetPeerConnection() {

@@ -85,6 +85,8 @@ fun DroidAssistApp(
     onStopSharing: () -> Unit,
     onDismissMessage: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val accessibilityServiceConnected by RemoteControlService.connectionState.collectAsState()
     var destinationIndex by rememberSaveable { mutableIntStateOf(0) }
     var remoteControlOpen by rememberSaveable { mutableStateOf(false) }
     var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
@@ -150,13 +152,25 @@ fun DroidAssistApp(
                         Checkbox(checked = trustController, onCheckedChange = { trustController = it })
                         Text("将此设备设为可信设备")
                     }
+                    if (!accessibilityServiceConnected) {
+                        Text(
+                            "远程控制权限尚未就绪。请先开启 DroidAssist 无障碍服务，再允许连接。",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             },
             confirmButton = {
-                Button(onClick = {
-                    onRespondToIncoming(true, trustController)
-                    trustController = false
-                }) { Text("允许") }
+                if (accessibilityServiceConnected) {
+                    Button(onClick = {
+                        onRespondToIncoming(true, trustController)
+                        trustController = false
+                    }) { Text("允许") }
+                } else {
+                    Button(
+                        onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                    ) { Text("开启无障碍") }
+                }
             },
             dismissButton = {
                 TextButton(onClick = {
@@ -672,6 +686,7 @@ private fun AssistConnectionStatus(status: WebRtcConnectionStatus) {
 private fun rememberRemoteControlEnabled(): Boolean {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val serviceConnected by RemoteControlService.connectionState.collectAsState()
     var enabled by remember { mutableStateOf(isRemoteControlEnabled(context)) }
     DisposableEffect(context, lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -680,7 +695,7 @@ private fun rememberRemoteControlEnabled(): Boolean {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    return enabled
+    return enabled && serviceConnected
 }
 
 private fun isRemoteControlEnabled(context: Context): Boolean {
@@ -714,7 +729,13 @@ private fun RemoteControlScreen(
     onClose: () -> Unit,
     onRequestDisconnect: () -> Unit,
 ) {
+    val context = LocalContext.current
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        WebRtcManager.controlFeedback.collect { message ->
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
     BackHandler {
         if (controlsVisible) controlsVisible = false else onClose()
     }
