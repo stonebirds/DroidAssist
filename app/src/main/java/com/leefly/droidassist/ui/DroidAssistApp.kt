@@ -797,13 +797,16 @@ private fun RemoteControlScreen(
         ModalBottomSheet(
             onDismissRequest = { controlsVisible = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            sheetGesturesEnabled = false,
+            dragHandle = null,
         ) {
             Column(
                 Modifier
                     .fillMaxWidth()
+                    .fillMaxHeight(0.78f)
                     .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Column {
