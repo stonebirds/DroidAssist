@@ -19,7 +19,7 @@
     button, a.button { border: 0; border-radius: 6px; padding: 11px 16px; background: #006a60; color: white; cursor: pointer; font-weight: 600; text-decoration: none; white-space: nowrap; }
     .secondary { background: #e4ebe8 !important; color: #18322d !important; }
     .qr { display: block; width: 220px; height: 220px; margin: 18px auto 6px; border: 1px solid #d7dfdc; }
-    ol { padding-left: 22px; line-height: 1.9; }
+    ol, ul { padding-left: 22px; line-height: 1.9; }
     code { background: #edf1ef; border-radius: 4px; padding: 2px 6px; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
     .note { color: #56635f; font-size: 14px; }
@@ -57,7 +57,15 @@
       </div>
     </section>
 
-    <p class="note">关闭此页面不会停止服务。需要停止时，请双击软件目录中的停止脚本。Quick Tunnel 重新建立后地址可能变化。</p>
+    <section class="panel">
+      <h2>停止电脑服务</h2>
+      <p>仅关闭此浏览器页面不会停止服务。使用结束后请回到解压目录：</p>
+      <ul>
+        <li>Mac：双击 <code>3-Stop-DroidAssist.command</code>。</li>
+        <li>Windows：双击 <code>3-Stop-DroidAssist.cmd</code>。</li>
+      </ul>
+      <p class="note">停止脚本不会删除数据库。再次启动后公网地址可能变化，两台手机需要使用同一个新地址。</p>
+    </section>
   </main>
   <script>
     function copyUrl() {

@@ -16,6 +16,11 @@ DroidAssist 是一套 Android 对 Android 的远程协助工具，支持实时�
    - 64 位 Windows：`DroidAssist-Server-Windows-x64-1.1.0.zip`
 4. 完整解压服务包，双击 `1-Start-DroidAssist` 开头的文件。
 5. 浏览器会自动显示服务器地址和二维码。把该地址填入两台手机的“设置 -> 服务器地址”，然后点击“注册本机”。
+6. 使用结束后回到解压目录停止电脑服务：
+   - Mac：双击 `3-Stop-DroidAssist.command`。
+   - Windows：双击 `3-Stop-DroidAssist.cmd`。
+
+关闭浏览器页面不会停止服务。停止脚本不会删除数据库；再次启动后如果公网地址发生变化，需要在两台手机上更新服务器地址。
 
 完整截图式操作顺序见 [普通用户快速开始](docs/QUICK_START.md)。首次打开下载的软件时，macOS、Windows 和 Android 可能显示来源确认，这是未通过应用商店分发时的系统安全机制。
 
