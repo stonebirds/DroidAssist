@@ -9,6 +9,9 @@ TUNNEL_PID_FILE="$RUNTIME_DIR/tunnel.pid"
 PUBLIC_URL_FILE="$RUNTIME_DIR/public-url"
 SERVER_LOG="$RUNTIME_DIR/server.log"
 TUNNEL_LOG="$RUNTIME_DIR/cloudflared.log"
+TUNNEL_MAX_ATTEMPTS=3
+TUNNEL_WAIT_SECONDS=45
+TUNNEL_RETRY_DELAYS=(30 90)
 
 pause_and_exit() {
   echo
@@ -24,7 +27,43 @@ is_running() {
   [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
 }
 
-for required in "$ROOT_DIR/runtime/bin/java" "$ROOT_DIR/tools/cloudflared" "$ROOT_DIR/server/lib"; do
+stop_tunnel_process() {
+  if is_running "$TUNNEL_PID_FILE"; then
+    local pid
+    pid="$(cat "$TUNNEL_PID_FILE")"
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+  rm -f "$TUNNEL_PID_FILE"
+}
+
+start_tunnel_process() {
+  local attempt="$1"
+  : >"$TUNNEL_LOG"
+  printf '%s\n' "--- Quick Tunnel 第 $attempt/$TUNNEL_MAX_ATTEMPTS 次申请 ---" >>"$TUNNEL_LOG"
+  nohup "$ROOT_DIR/tools/cloudflared" tunnel \
+    --url http://127.0.0.1:8080 \
+    --no-autoupdate \
+    >>"$TUNNEL_LOG" 2>&1 </dev/null &
+  echo $! >"$TUNNEL_PID_FILE"
+}
+
+wait_for_public_url() {
+  PUBLIC_URL=""
+  for _ in $(seq 1 "$TUNNEL_WAIT_SECONDS"); do
+    PUBLIC_URL="$(sed -nE 's/.*(https:\/\/[a-z0-9-]+\.trycloudflare\.com).*/\1/p' "$TUNNEL_LOG" | tail -1)"
+    [[ -n "$PUBLIC_URL" ]] && return 0
+    if grep -Eq 'status 429|Tunnelstore request failed' "$TUNNEL_LOG"; then
+      return 2
+    fi
+    is_running "$TUNNEL_PID_FILE" || return 1
+    sleep 1
+  done
+  return 1
+}
+
+for required in "$ROOT_DIR/runtime/bin/java" "$ROOT_DIR/tools/cloudflared" "$ROOT_DIR/server/lib" \
+  "$ROOT_DIR/web/setup-template.html" "$ROOT_DIR/web/qrcode.min.js"; do
   if [[ ! -e "$required" ]]; then
     echo "缺少运行文件：$required"
     echo "请重新下载并完整解压 DroidAssist 服务包。"
@@ -71,33 +110,47 @@ if is_running "$TUNNEL_PID_FILE" && [[ -s "$PUBLIC_URL_FILE" ]]; then
   echo "公网隧道已经运行。"
 else
   rm -f "$TUNNEL_PID_FILE" "$PUBLIC_URL_FILE"
-  : >"$TUNNEL_LOG"
-  nohup "$ROOT_DIR/tools/cloudflared" tunnel \
-    --url http://127.0.0.1:8080 \
-    --no-autoupdate \
-    >>"$TUNNEL_LOG" 2>&1 </dev/null &
-  echo $! >"$TUNNEL_PID_FILE"
-
-  echo "正在创建公网地址，通常需要几秒钟..."
   PUBLIC_URL=""
-  for _ in $(seq 1 90); do
-    PUBLIC_URL="$(sed -nE 's/.*(https:\/\/[a-z0-9-]+\.trycloudflare\.com).*/\1/p' "$TUNNEL_LOG" | tail -1)"
-    [[ -n "$PUBLIC_URL" ]] && break
-    sleep 1
+  tunnel_rate_limited=false
+  for attempt in $(seq 1 "$TUNNEL_MAX_ATTEMPTS"); do
+    echo "正在创建公网地址（第 $attempt/$TUNNEL_MAX_ATTEMPTS 次）..."
+    start_tunnel_process "$attempt"
+    wait_for_public_url
+    tunnel_result=$?
+    [[ "$tunnel_result" -eq 0 ]] && break
+
+    stop_tunnel_process
+    if [[ "$tunnel_result" -eq 2 ]]; then
+      tunnel_rate_limited=true
+      if [[ "$attempt" -lt "$TUNNEL_MAX_ATTEMPTS" ]]; then
+        retry_delay="${TUNNEL_RETRY_DELAYS[$((attempt - 1))]}"
+        echo "Cloudflare 暂时限制匿名隧道请求（HTTP 429），$retry_delay 秒后自动重试..."
+        sleep "$retry_delay"
+        continue
+      fi
+    fi
+    break
   done
   if [[ -z "$PUBLIC_URL" ]]; then
-    echo "公网隧道启动失败，日志位置：$TUNNEL_LOG"
+    if [[ "$tunnel_rate_limited" == true ]]; then
+      echo "Cloudflare 仍在限制匿名 Quick Tunnel 请求（HTTP 429）。"
+      echo "DroidAssist 本地服务已经正常启动，不需要重新安装。"
+      echo "请等待 10-20 分钟后再次双击启动文件，或切换 Mac 网络后重试。"
+      echo "不要连续反复启动，否则可能延长限流时间。"
+    else
+      echo "公网隧道启动失败，请检查网络后重试。"
+    fi
+    echo "日志位置：$TUNNEL_LOG"
     tail -n 30 "$TUNNEL_LOG" 2>/dev/null || true
     pause_and_exit 1
   fi
   echo "$PUBLIC_URL" >"$PUBLIC_URL_FILE"
 fi
 
-QR_URL="https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=$PUBLIC_URL"
 sed \
   -e "s|__PUBLIC_URL__|$PUBLIC_URL|g" \
-  -e "s|__QR_URL__|$QR_URL|g" \
   "$ROOT_DIR/web/setup-template.html" >"$RUNTIME_DIR/setup.html"
+cp "$ROOT_DIR/web/qrcode.min.js" "$RUNTIME_DIR/qrcode.min.js"
 
 printf '%s' "$PUBLIC_URL" | pbcopy 2>/dev/null || true
 open "$RUNTIME_DIR/setup.html"

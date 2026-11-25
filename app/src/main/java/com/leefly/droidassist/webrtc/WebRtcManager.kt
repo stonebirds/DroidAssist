@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjection
 import android.util.Log
+import com.leefly.droidassist.DiagnosticLog
 import com.leefly.droidassist.protocol.SignalEnvelope
 import com.leefly.droidassist.protocol.SignalType
 import com.leefly.droidassist.service.RemoteControlService
@@ -48,6 +49,7 @@ object WebRtcManager {
     private var peerDeviceId: String? = null
     private var controlledRole = false
     private var remoteDescriptionSet = false
+    private var iceRestartAttempts = 0
     private val pendingRemoteIceCandidates = mutableListOf<IceCandidate>()
     private var signalSender: ((SignalEnvelope) -> Unit)? = null
     private val _remoteVideoReady = MutableStateFlow(false)
@@ -75,6 +77,7 @@ object WebRtcManager {
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
+        DiagnosticLog.info("WebRTC", "PeerConnectionFactory initialized")
     }
 
     @Synchronized
@@ -85,6 +88,7 @@ object WebRtcManager {
         peerDeviceId = controlledDevice
         controlledRole = false
         createPeerConnection()
+        DiagnosticLog.info("WebRTC", "Controller role configured for session ${session.take(8)}")
         updateStatus(WebRtcConnectionStatus.CONNECTING, "Controller is waiting for approval and media")
     }
 
@@ -95,6 +99,7 @@ object WebRtcManager {
         localDeviceId = localDevice
         peerDeviceId = controllerDevice
         controlledRole = true
+        DiagnosticLog.info("WebRTC", "Controlled role configured for session ${session.take(8)}")
         updateStatus(
             if (capturePermission == null) WebRtcConnectionStatus.WAITING_FOR_CAPTURE else WebRtcConnectionStatus.CONNECTING,
             "Controlled session configured",
@@ -105,6 +110,7 @@ object WebRtcManager {
     @Synchronized
     fun provideScreenCapturePermission(data: Intent) {
         capturePermission = Intent(data)
+        DiagnosticLog.info("WebRTC", "Full-screen capture permission received")
         updateStatus(
             if (controlledRole && sessionId != null) WebRtcConnectionStatus.CONNECTING else WebRtcConnectionStatus.CAPTURE_READY,
             "Full-screen capture permission received",
@@ -116,6 +122,7 @@ object WebRtcManager {
     fun handleSignal(signal: SignalEnvelope) {
         if (signal.sessionId != sessionId || signal.fromDeviceId != peerDeviceId) return
         Log.i(TAG, "Received ${signal.type} for session ${signal.sessionId.take(8)}")
+        DiagnosticLog.info("WebRTC", "Received ${signal.type} for session ${signal.sessionId.take(8)}")
         when (signal.type) {
             SignalType.OFFER -> {
                 val sdp = signal.payload.jsonObject["sdp"]?.jsonPrimitive?.content ?: return
@@ -163,13 +170,16 @@ object WebRtcManager {
 
     fun attachRenderer(renderer: SurfaceViewRenderer) {
         renderer.init(eglBase.eglBaseContext, object : RendererCommon.RendererEvents {
-            override fun onFirstFrameRendered() = Unit
+            override fun onFirstFrameRendered() {
+                DiagnosticLog.info("WebRTC", "First remote video frame rendered")
+            }
             override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
                 val rotated = rotation % 180 != 0
                 val displayWidth = if (rotated) height else width
                 val displayHeight = if (rotated) width else height
                 if (displayWidth > 0 && displayHeight > 0) {
                     _remoteAspectRatio.value = displayWidth.toFloat() / displayHeight
+                    DiagnosticLog.info("WebRTC", "Remote frame resolution ${displayWidth}x$displayHeight")
                 }
             }
         })
@@ -238,6 +248,7 @@ object WebRtcManager {
             ScreenCapturerAndroid(capturePermission, object : MediaProjection.Callback() {
                 override fun onStop() {
                     Log.i(TAG, "Screen capture stopped by system")
+                    DiagnosticLog.warn("Capture", "Screen capture stopped by system")
                     stopScreenCapture()
                 }
             })
@@ -252,6 +263,7 @@ object WebRtcManager {
             capturer.startCapture(width, height, 20)
         } catch (error: Exception) {
             Log.e(TAG, "Unable to start screen capture", error)
+            DiagnosticLog.error("Capture", "Unable to start screen capture", error)
             capturer.dispose()
             helper.dispose()
             source.dispose()
@@ -267,41 +279,55 @@ object WebRtcManager {
         videoSource = source
         localTrack = track
         _isScreenSharing.value = true
-        connection.createOffer(createObserver("create offer") { offer ->
-            connection.setLocalDescription(setObserver("set local offer") {
-                Log.i(TAG, "Local screen offer is ready")
-                sendSdp(SignalType.OFFER, offer)
-            }, offer)
-        }, MediaConstraints())
+        DiagnosticLog.info("Capture", "Screen capture started at ${width}x$height, 20 fps")
+        createAndSendOffer(connection, iceRestart = false)
     }
 
     private fun createPeerConnection(): PeerConnection? {
         peerConnection?.let { return it }
         val config = PeerConnection.RTCConfiguration(
             listOf(
-                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+                PeerConnection.IceServer.builder("stun:stun.l.google.com:19305").createIceServer(),
+                PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
             )
-        ).apply { sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN }
-        return factory.createPeerConnection(config, peerObserver)?.also { peerConnection = it }
+        ).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+        }
+        return factory.createPeerConnection(config, peerObserver)?.also {
+            peerConnection = it
+            DiagnosticLog.info("WebRTC", "Peer connection created with 3 STUN endpoints")
+        } ?: run {
+            DiagnosticLog.error("WebRTC", "Unable to create peer connection")
+            null
+        }
     }
 
     private val peerObserver = object : PeerConnection.Observer {
         override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
         override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
             Log.i(TAG, "ICE state: $state")
+            DiagnosticLog.info("WebRTC", "ICE connection state: $state")
             when (state) {
                 PeerConnection.IceConnectionState.CHECKING -> updateStatus(WebRtcConnectionStatus.CONNECTING, "ICE checking")
                 PeerConnection.IceConnectionState.CONNECTED,
                 PeerConnection.IceConnectionState.COMPLETED -> updateStatus(WebRtcConnectionStatus.CONNECTED, "ICE connected")
                 PeerConnection.IceConnectionState.DISCONNECTED -> updateStatus(WebRtcConnectionStatus.DISCONNECTED, "ICE disconnected")
-                PeerConnection.IceConnectionState.FAILED -> updateStatus(WebRtcConnectionStatus.FAILED, "ICE failed")
+                PeerConnection.IceConnectionState.FAILED -> {
+                    if (controlledRole && iceRestartAttempts < 2) restartIce()
+                    else updateStatus(WebRtcConnectionStatus.FAILED, "ICE failed")
+                }
                 else -> Unit
             }
         }
 
         override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) = Unit
+        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+            DiagnosticLog.info("WebRTC", "ICE gathering state: $state")
+        }
         override fun onIceCandidate(candidate: IceCandidate) {
+            DiagnosticLog.info("WebRTC", "Local ICE candidate gathered")
             send(
                 SignalType.ICE,
                 buildJsonObject {
@@ -325,7 +351,31 @@ object WebRtcManager {
             remoteTrack = track
             _remoteVideoReady.value = true
             Log.i(TAG, "Remote video track received")
+            DiagnosticLog.info("WebRTC", "Remote video track received")
         }
+    }
+
+    @Synchronized
+    private fun restartIce() {
+        val connection = peerConnection ?: return
+        iceRestartAttempts += 1
+        updateStatus(WebRtcConnectionStatus.CONNECTING, "ICE restart $iceRestartAttempts/2")
+        DiagnosticLog.warn("WebRTC", "ICE failed; starting automatic restart $iceRestartAttempts/2")
+        connection.restartIce()
+        createAndSendOffer(connection, iceRestart = true)
+    }
+
+    private fun createAndSendOffer(connection: PeerConnection, iceRestart: Boolean) {
+        val constraints = MediaConstraints().apply {
+            if (iceRestart) mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+        }
+        connection.createOffer(createObserver(if (iceRestart) "create ICE restart offer" else "create offer") { offer ->
+            connection.setLocalDescription(setObserver("set local offer") {
+                Log.i(TAG, "Local screen offer is ready")
+                DiagnosticLog.info("WebRTC", if (iceRestart) "ICE restart offer is ready" else "Local screen offer is ready")
+                sendSdp(SignalType.OFFER, offer)
+            }, offer)
+        }, constraints)
     }
 
     private fun sendSdp(type: SignalType, description: SessionDescription) = send(
@@ -338,6 +388,7 @@ object WebRtcManager {
         val from = localDeviceId ?: return
         val to = peerDeviceId ?: return
         Log.i(TAG, "Sending $type for session ${session.take(8)}")
+        DiagnosticLog.info("WebRTC", "Sending $type for session ${session.take(8)}")
         signalSender?.invoke(SignalEnvelope(session, from, to, type, payload))
     }
 
@@ -378,6 +429,7 @@ object WebRtcManager {
         peerConnection = null
         remoteDescriptionSet = false
         pendingRemoteIceCandidates.clear()
+        iceRestartAttempts = 0
     }
 
     private fun markRemoteDescriptionSet(connection: PeerConnection) {
@@ -394,6 +446,7 @@ object WebRtcManager {
     private fun updateStatus(status: WebRtcConnectionStatus, detail: String) {
         _connectionStatus.value = status
         Log.i(TAG, "Connection status: $status ($detail)")
+        DiagnosticLog.info("WebRTC", "Connection status: $status ($detail)")
     }
 
     private fun setObserver(label: String, onSetSuccess: (() -> Unit)? = null) =
@@ -405,10 +458,12 @@ object WebRtcManager {
 
             override fun onCreateFailure(error: String) {
                 Log.e(TAG, "$label failed: $error")
+                DiagnosticLog.error("WebRTC", "$label failed: $error")
             }
 
             override fun onSetFailure(error: String) {
                 Log.e(TAG, "$label failed: $error")
+                DiagnosticLog.error("WebRTC", "$label failed: $error")
             }
         }
 
@@ -420,10 +475,12 @@ object WebRtcManager {
             override fun onSetSuccess() = Unit
             override fun onCreateFailure(error: String) {
                 Log.e(TAG, "$label failed: $error")
+                DiagnosticLog.error("WebRTC", "$label failed: $error")
             }
 
             override fun onSetFailure(error: String) {
                 Log.e(TAG, "$label failed: $error")
+                DiagnosticLog.error("WebRTC", "$label failed: $error")
             }
         }
 }

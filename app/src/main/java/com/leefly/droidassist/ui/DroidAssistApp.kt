@@ -10,19 +10,25 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.StopCircle
@@ -44,6 +50,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.leefly.droidassist.AssistUiState
+import com.leefly.droidassist.DiagnosticLog
+import com.leefly.droidassist.formatAuthorizationText
+import com.leefly.droidassist.parseAuthorizationText
 import com.leefly.droidassist.protocol.GrantType
 import com.leefly.droidassist.protocol.ManagedDevice
 import com.leefly.droidassist.service.RemoteControlService
@@ -63,6 +72,7 @@ private enum class MainDestination(val label: String) {
 fun DroidAssistApp(
     state: AssistUiState,
     onServerUrlChange: (String) -> Unit,
+    onScanServerUrl: () -> Unit,
     onRegister: () -> Unit,
     onCreateGrant: (GrantType) -> Unit,
     onConnect: (String, String) -> Unit,
@@ -75,6 +85,7 @@ fun DroidAssistApp(
 ) {
     var destinationIndex by rememberSaveable { mutableIntStateOf(0) }
     var remoteControlOpen by rememberSaveable { mutableStateOf(false) }
+    var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
     var trustController by rememberSaveable { mutableStateOf(false) }
     val destination = MainDestination.entries[destinationIndex]
     val snackbarHostState = remember { SnackbarHostState() }
@@ -118,13 +129,29 @@ fun DroidAssistApp(
         )
     }
 
+    if (diagnosticsOpen) {
+        DiagnosticLogScreen(onClose = { diagnosticsOpen = false })
+        return
+    }
+
     if (remoteControlOpen && state.remoteVideoReady) {
         RemoteControlScreen(onClose = { remoteControlOpen = false })
         return
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(destination.label) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(destination.label) },
+                actions = {
+                    if (destination == MainDestination.SETTINGS) {
+                        IconButton(onClick = { diagnosticsOpen = true }) {
+                            Icon(Icons.Outlined.Description, contentDescription = "查看诊断日志")
+                        }
+                    }
+                },
+            )
+        },
         bottomBar = {
             NavigationBar {
                 MainDestination.entries.forEachIndexed { index, item ->
@@ -166,10 +193,75 @@ fun DroidAssistApp(
                 MainDestination.SETTINGS -> SettingsTab(
                     state = state,
                     onServerUrlChange = onServerUrlChange,
+                    onScanServerUrl = onScanServerUrl,
                     onRegister = onRegister,
                 )
             }
             if (state.busy) CircularProgressIndicator(Modifier.align(Alignment.Center))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DiagnosticLogScreen(onClose: () -> Unit) {
+    val context = LocalContext.current
+    val entries by DiagnosticLog.entries.collectAsState()
+    val versionName = remember {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    }
+    val report = remember(entries, versionName) {
+        DiagnosticLog.reportHeader(versionName) + entries.joinToString("\n")
+    }
+    BackHandler(onBack = onClose)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("诊断日志") },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DroidAssist 诊断日志", report))
+                            Toast.makeText(context, "诊断日志已复制", Toast.LENGTH_SHORT).show()
+                        },
+                    ) {
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = "复制全部日志")
+                    }
+                    IconButton(onClick = DiagnosticLog::clear) {
+                        Icon(Icons.Outlined.DeleteOutline, contentDescription = "清空日志")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                Text(
+                    "复现问题后点击右上角复制，将完整内容发给协助人员。日志不包含连接密码和设备令牌。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            item {
+                HorizontalDivider()
+            }
+            item {
+                SelectionContainer {
+                    Text(
+                        if (entries.isEmpty()) "暂无日志" else report,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
         }
     }
 }
@@ -184,6 +276,7 @@ private fun DevicesTab(
     onRevoke: (String) -> Unit,
     onOpenRemoteControl: () -> Unit,
 ) {
+    val context = LocalContext.current
     var remoteCode by rememberSaveable { mutableStateOf("") }
     var remotePassword by rememberSaveable { mutableStateOf("") }
 
@@ -251,6 +344,25 @@ private fun DevicesTab(
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
         )
+        OutlinedButton(
+            onClick = {
+                val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                val credentials = parseAuthorizationText(text)
+                if (credentials == null) {
+                    Toast.makeText(context, "剪贴板中没有可识别的 DroidAssist 授权信息", Toast.LENGTH_SHORT).show()
+                } else {
+                    remoteCode = credentials.matchingCode
+                    remotePassword = credentials.password
+                    Toast.makeText(context, "匹配码和连接密码已填入", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Outlined.ContentPaste, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("从剪贴板填入授权")
+        }
         Button(
             onClick = { onConnect(remoteCode, remotePassword) },
             enabled = remoteCode.length == 9 && remotePassword.isNotBlank() && !state.busy,
@@ -258,6 +370,7 @@ private fun DevicesTab(
         ) {
             Text("发起连接")
         }
+        AssistConnectionStatus(state.connectionStatus)
 
         HorizontalDivider()
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -362,6 +475,21 @@ private fun ThisDeviceTab(
                     Text("连接密码", style = MaterialTheme.typography.labelLarge)
                     Text(grant.password, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(if (grant.expiresAtEpochMillis == null) "首次绑定有效" else "10 分钟内使用一次")
+                    OutlinedButton(
+                        onClick = {
+                            val authorization = formatAuthorizationText(state.serverUrl, grant)
+                            val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                            clipboard.setPrimaryClip(
+                                android.content.ClipData.newPlainText("DroidAssist 授权信息", authorization),
+                            )
+                            Toast.makeText(context, "完整授权信息已复制", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("复制完整授权信息")
+                    }
                 }
             }
         }
@@ -401,6 +529,7 @@ private fun ThisDeviceTab(
 private fun SettingsTab(
     state: AssistUiState,
     onServerUrlChange: (String) -> Unit,
+    onScanServerUrl: () -> Unit,
     onRegister: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -420,6 +549,11 @@ private fun SettingsTab(
             modifier = Modifier.fillMaxWidth(),
             label = { Text("服务器地址") },
             leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+            trailingIcon = {
+                IconButton(onClick = onScanServerUrl) {
+                    Icon(Icons.Outlined.QrCodeScanner, contentDescription = "扫描服务器二维码")
+                }
+            },
             singleLine = true,
         )
         Button(onClick = onRegister, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {

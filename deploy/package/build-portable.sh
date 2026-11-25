@@ -7,6 +7,7 @@ BUILD_DIR="$ROOT_DIR/.runtime/portable-build"
 DIST_DIR="$ROOT_DIR/dist"
 VERSION="$(awk -F'"' '/versionName = / { print $2; exit }' "$ROOT_DIR/app/build.gradle.kts")"
 CLOUDFLARED_VERSION="2026.11.2"
+QRCODE_VERSION="1.4.4"
 
 JRE_MAC_ARM64_URL="https://cdn.azul.com/zulu/bin/zulu21.54.201-ca-jre21.0.13.1-macosx_aarch64.tar.gz"
 JRE_MAC_ARM64_SHA="2fe02aa720d3b3e4ed5f87f013a5ebd9e5a26159380192d01d7a908591e0b04d"
@@ -21,6 +22,8 @@ CLOUDFLARED_MAC_X64_URL="https://github.com/cloudflare/cloudflared/releases/down
 CLOUDFLARED_MAC_X64_SHA="6153d9ec629174882a3adbff2f7dc5a24b4f3bdd7ccc38eaa84fba26eb890311"
 CLOUDFLARED_WINDOWS_X64_URL="https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-windows-amd64.exe"
 CLOUDFLARED_WINDOWS_X64_SHA="555b46c85582461d189cac30d14ad05480d612613801be9f110b8ce08c5b2113"
+QRCODE_JS_URL="https://cdn.jsdelivr.net/npm/qrcode-generator@$QRCODE_VERSION/qrcode.min.js"
+QRCODE_JS_SHA="bb2365e4902f4f84852cf4025e6f6a60325a682aeafa43fb63b7fc8f098d1ef2"
 
 mkdir -p "$CACHE_DIR" "$BUILD_DIR" "$DIST_DIR"
 
@@ -55,6 +58,7 @@ copy_common() {
   mkdir -p "$package_dir/server" "$package_dir/runtime" "$package_dir/tools" "$package_dir/web"
   cp -R "$ROOT_DIR/server/build/install/server/." "$package_dir/server/"
   cp "$ROOT_DIR/deploy/portable/common/setup-template.html" "$package_dir/web/"
+  cp "$CACHE_DIR/qrcode.min.js" "$package_dir/web/"
   cp "$ROOT_DIR/deploy/portable/common/THIRD_PARTY_NOTICES.txt" "$package_dir/"
   cp "$ROOT_DIR/LICENSE" "$package_dir/"
 }
@@ -151,6 +155,7 @@ build_windows() {
 
 echo "Building server distribution"
 (cd "$ROOT_DIR" && ./gradlew :server:installDist)
+download "$QRCODE_JS_URL" "$CACHE_DIR/qrcode.min.js" "$QRCODE_JS_SHA"
 
 if [[ $# -eq 0 ]]; then
   set -- macos-arm64 macos-x64 windows-x64
@@ -164,5 +169,5 @@ for target in "$@"; do
   esac
 done
 
-(cd "$DIST_DIR" && shasum -a 256 DroidAssist-Server-*.zip >SHA256SUMS.txt)
+(cd "$DIST_DIR" && shasum -a 256 DroidAssist-Server-*-"$VERSION".zip >SHA256SUMS.txt)
 echo "Portable packages are ready in $DIST_DIR"

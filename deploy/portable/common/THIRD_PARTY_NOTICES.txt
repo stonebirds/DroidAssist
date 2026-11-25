@@ -20,5 +20,10 @@ This package contains software distributed under separate licenses:
    Project: https://github.com/xerial/sqlite-jdbc
    License: Apache License 2.0
 
+5. qrcode-generator
+   Project: https://github.com/kazuhikoarase/qrcode-generator
+   Copyright (c) 2009 Kazuhiko Arase
+   License: MIT
+
 The DroidAssist source code is distributed under the 0BSD license. See the
 LICENSE file included with this package.

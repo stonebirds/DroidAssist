@@ -18,7 +18,8 @@
     input { min-width: 0; flex: 1; border: 1px solid #899390; border-radius: 6px; padding: 11px 12px; font-size: 14px; }
     button, a.button { border: 0; border-radius: 6px; padding: 11px 16px; background: #006a60; color: white; cursor: pointer; font-weight: 600; text-decoration: none; white-space: nowrap; }
     .secondary { background: #e4ebe8 !important; color: #18322d !important; }
-    .qr { display: block; width: 220px; height: 220px; margin: 18px auto 6px; border: 1px solid #d7dfdc; }
+    .qr { display: grid; place-items: center; width: 220px; height: 220px; margin: 18px auto 6px; border: 1px solid #d7dfdc; background: white; }
+    .qr svg { display: block; width: 100%; height: 100%; }
     ol, ul { padding-left: 22px; line-height: 1.9; }
     code { background: #edf1ef; border-radius: 4px; padding: 2px 6px; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
@@ -39,8 +40,8 @@
         <input id="server-url" value="__PUBLIC_URL__" readonly>
         <button type="button" onclick="copyUrl()">复制地址</button>
       </div>
-      <img class="qr" src="__QR_URL__" alt="服务器地址二维码">
-      <p class="note">二维码由 api.qrserver.com 生成。也可以直接复制上面的地址。</p>
+      <div id="server-qr" class="qr" role="img" aria-label="服务器地址二维码"></div>
+      <p class="note">二维码在本机离线生成，不会把服务器地址发送给第三方。也可以直接复制上面的地址。</p>
     </section>
 
     <section class="panel">
@@ -67,7 +68,19 @@
       <p class="note">停止脚本不会删除数据库。再次启动后公网地址可能变化，两台手机需要使用同一个新地址。</p>
     </section>
   </main>
+  <script src="qrcode.min.js"></script>
   <script>
+    const serverUrl = document.getElementById('server-url').value;
+    const qr = qrcode(0, 'M');
+    qr.addData(serverUrl, 'Byte');
+    qr.make();
+    document.getElementById('server-qr').innerHTML = qr.createSvgTag({
+      cellSize: 5,
+      margin: 20,
+      scalable: true,
+      alt: '服务器地址二维码'
+    });
+
     function copyUrl() {
       const input = document.getElementById('server-url');
       input.select();

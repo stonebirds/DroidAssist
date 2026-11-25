@@ -1,5 +1,6 @@
 package com.leefly.droidassist.data
 
+import com.leefly.droidassist.DiagnosticLog
 import com.leefly.droidassist.protocol.*
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -73,6 +74,7 @@ class AssistApi : AutoCloseable {
             parameters.append("token", token)
         }.buildString()
         client.webSocket(urlString = signalUrl) {
+            DiagnosticLog.info("Signal", "Device WebSocket connected")
             coroutineScope {
                 val sender = launch {
                     for (signal in outgoing) {
@@ -87,6 +89,7 @@ class AssistApi : AutoCloseable {
                         }
                     }
                 } finally {
+                    DiagnosticLog.warn("Signal", "Device WebSocket closed")
                     sender.cancel()
                 }
             }

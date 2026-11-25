@@ -27,6 +27,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
+import java.net.URI
 
 private val Application.dataStore by preferencesDataStore("droidassist")
 
@@ -62,6 +63,8 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
     private val outgoingSignals = Channel<SignalEnvelope>(Channel.UNLIMITED)
 
     init {
+        DiagnosticLog.initialize(application)
+        DiagnosticLog.info("App", "Initializing device state and WebRTC")
         WebRtcManager.initialize(application) { outgoingSignals.trySend(it) }
         viewModelScope.launch {
             WebRtcManager.remoteVideoReady.collect { ready ->
@@ -95,6 +98,15 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setServerUrl(value: String) = _state.update { it.copy(serverUrl = value) }
+    fun setServerUrlFromScan(value: String) {
+        val normalized = value.trim().trimEnd('/')
+        val uri = runCatching { URI(normalized) }.getOrNull()
+        if (uri != null && uri.scheme in setOf("http", "https") && !uri.host.isNullOrBlank()) {
+            _state.update { it.copy(serverUrl = normalized, message = "已识别服务器地址，请点击注册本机") }
+        } else {
+            _state.update { it.copy(message = "二维码中没有有效的服务器地址") }
+        }
+    }
     fun clearMessage() = _state.update { it.copy(message = null) }
     fun clearRecentMatchingCodes() {
         _state.update { it.copy(recentMatchingCodes = emptyList()) }
@@ -103,7 +115,7 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun register() = launchRequest {
+    fun register() = launchRequest("注册设备") {
         val current = _state.value
         val normalizedServerUrl = current.serverUrl.trim().trimEnd('/')
         require(
@@ -130,13 +142,13 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
         startSignalConnection()
     }
 
-    fun createGrant(type: GrantType) = launchRequest {
+    fun createGrant(type: GrantType) = launchRequest(if (type == GrantType.TEMPORARY) "创建临时授权" else "创建永久授权") {
         val token = token()
         val grant = api.createGrant(_state.value.serverUrl, token, type)
         _state.update { it.copy(grant = grant, message = if (type == GrantType.TEMPORARY) "临时授权已生成" else "永久授权已生成") }
     }
 
-    fun connect(code: String, password: String) = launchRequest {
+    fun connect(code: String, password: String) = launchRequest("发起连接") {
         val current = _state.value
         require(current.deviceId.isNotBlank()) { "请先注册本机" }
         val normalizedCode = code.filter(Char::isDigit)
@@ -160,6 +172,7 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
 
     fun respondToIncoming(approved: Boolean, trustController: Boolean) {
         val incoming = _state.value.incomingSession ?: return
+        DiagnosticLog.info("Session", if (approved) "User approved incoming session ${incoming.sessionId.take(8)}" else "User rejected incoming session ${incoming.sessionId.take(8)}")
         _state.update { it.copy(incomingSession = null, message = null) }
         viewModelScope.launch {
             runCatching {
@@ -172,6 +185,7 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }.onSuccess { response ->
                 if (response.status == SessionStatus.APPROVED) {
+                    DiagnosticLog.info("Session", "Session ${response.sessionId.take(8)} approved; configuring controlled role")
                     WebRtcManager.configureControlled(response.sessionId, _state.value.deviceId, response.peerDeviceId)
                     if (WebRtcManager.connectionStatus.value == WebRtcConnectionStatus.WAITING_FOR_CAPTURE) {
                         _screenCaptureRequests.tryEmit(Unit)
@@ -181,6 +195,7 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(message = if (response.status == SessionStatus.APPROVED) "已允许本次远程协助" else "已拒绝连接请求")
                 }
             }.onFailure { error ->
+                DiagnosticLog.error("Session", "Unable to confirm incoming session", error)
                 _state.update {
                     it.copy(
                         incomingSession = incoming,
@@ -191,12 +206,12 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun refreshManagement() = launchRequest {
+    fun refreshManagement() = launchRequest("刷新设备") {
         val response = api.management(_state.value.serverUrl, token())
         _state.update { it.copy(management = response) }
     }
 
-    fun revoke(peerId: String) = launchRequest {
+    fun revoke(peerId: String) = launchRequest("撤销授权") {
         api.revoke(_state.value.serverUrl, token(), peerId)
         val response = api.management(_state.value.serverUrl, token())
         _state.update { it.copy(management = response, message = "授权已撤销") }
@@ -208,13 +223,20 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
     private fun startSignalConnection() {
         signalJob?.cancel()
         signalJob = viewModelScope.launch {
+            var failureCount = 0
             while (isActive) {
                 val preferences = getApplication<Application>().dataStore.data.first()
                 val deviceId = preferences[deviceIdKey]
                 val deviceToken = preferences[tokenKey]
                 if (deviceId.isNullOrBlank() || deviceToken.isNullOrBlank()) return@launch
+                DiagnosticLog.info("Signal", "Connecting device WebSocket")
                 runCatching {
                     api.listenSignals(_state.value.serverUrl, deviceId, deviceToken, outgoingSignals, ::handleSignal)
+                }.onFailure { error ->
+                    failureCount += 1
+                    if (failureCount == 1 || failureCount % 15 == 0) {
+                        DiagnosticLog.warn("Signal", "WebSocket disconnected (${error.javaClass.simpleName}); retrying")
+                    }
                 }
                 if (isActive) delay(2_000)
             }
@@ -222,6 +244,7 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private suspend fun handleSignal(signal: SignalEnvelope) {
+        DiagnosticLog.info("Signal", "Received ${signal.type} for session ${signal.sessionId.take(8)}")
         when (signal.type) {
             SignalType.SESSION_REQUEST -> {
                 val incoming = json.decodeFromJsonElement<IncomingSessionResponse>(signal.payload)
@@ -241,11 +264,15 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun launchRequest(block: suspend () -> Unit) {
+    private fun launchRequest(operation: String, block: suspend () -> Unit) {
         if (_state.value.busy) return
+        DiagnosticLog.info("Request", "$operation started")
         _state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
-            runCatching { block() }.onFailure { error ->
+            runCatching { block() }.onSuccess {
+                DiagnosticLog.info("Request", "$operation completed")
+            }.onFailure { error ->
+                DiagnosticLog.error("Request", "$operation failed", error)
                 _state.update { it.copy(message = error.message ?: "请求失败") }
             }
             _state.update { it.copy(busy = false) }

@@ -6,7 +6,7 @@ DroidAssist Windows 一键服务包
 2. 双击“1-Start-DroidAssist.cmd”。
 3. Windows 如显示安全提示，请确认文件来自 DroidAssist GitHub Release 后选择继续运行。
 4. 等待浏览器自动打开服务页面。
-5. 在两台 Android 手机上安装 DroidAssist APK，并按页面提示填写服务器地址。
+5. 在两台 Android 手机上安装 DroidAssist APK，打开“设置”并扫描页面二维码。
 
 日常使用：
 - 启动：双击“1-Start-DroidAssist.cmd”。重复启动不会重复创建服务。
@@ -18,3 +18,4 @@ DroidAssist Windows 一键服务包
 
 软件包已经内置 Java 和 cloudflared，不需要安装 Android Studio、JDK、Gradle 或 Git。
 Quick Tunnel 完全停止后再次启动，公网地址可能变化；两台手机需要使用同一个新地址。
+如果提示 Cloudflare HTTP 429，请让脚本完成自动重试；仍失败时等待 10-20 分钟或切换网络，不要连续反复启动。

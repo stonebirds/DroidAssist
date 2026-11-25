@@ -80,7 +80,7 @@ Gradle 配置不会打印或保存这些值。脚本构建后使用 Android SDK 
 
 1. 编译 Ktor `installDist`。
 2. 下载固定版本的 Azul Zulu OpenJDK JRE。
-3. 下载固定版本的官方 cloudflared。
+3. 下载固定版本的官方 cloudflared 和离线二维码生成脚本。
 4. 校验所有下载文件的 SHA-256。
 5. 复制一键脚本、使用页面、许可证和第三方声明。
 6. 在 `dist/` 生成 ZIP 和校验文件。
@@ -108,17 +108,23 @@ git diff --check
 确认 `app/build.gradle.kts` 的 `versionCode` 和 `versionName` 已更新，代码已提交并推送，然后创建同版本 tag：
 
 ```bash
-git tag -a v1.1.0 -m "DroidAssist 1.1.0"
-git push origin v1.1.0
+git tag -a v1.1.1 -m "DroidAssist 1.1.1"
+git push origin v1.1.1
 ```
 
 GitHub CLI 登录后上传：
 
 ```bash
-gh release create v1.1.0 dist/* \
+gh release create v1.1.1 \
+  dist/DroidAssist-1.1.1-release.apk \
+  dist/DroidAssist-Server-macOS-arm64-1.1.1.zip \
+  dist/DroidAssist-Server-macOS-x64-1.1.1.zip \
+  dist/DroidAssist-Server-Windows-x64-1.1.1.zip \
+  dist/APK-SHA256.txt \
+  dist/SHA256SUMS.txt \
   --repo stonebirds/DroidAssist \
-  --title "DroidAssist 1.1.0" \
-  --notes-file docs/releases/v1.1.0.md
+  --title "DroidAssist 1.1.1" \
+  --notes-file docs/releases/v1.1.1.md
 ```
 
 仓库的 `Build release artifacts` workflow 可以在 GitHub Actions 页面手动运行。输入 tag，并选择是否直接发布。自动构建需要配置以下 GitHub Actions Secrets：

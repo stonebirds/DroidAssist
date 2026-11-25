@@ -7,12 +7,14 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import com.leefly.droidassist.DiagnosticLog
 import com.leefly.droidassist.webrtc.WebRtcManager
 
 class ScreenShareService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             Log.i(TAG, "Stopping screen share service")
+            DiagnosticLog.info("Capture", "Stopping screen share foreground service")
             stopSharing()
             return START_NOT_STICKY
         }
@@ -27,6 +29,7 @@ class ScreenShareService : Service() {
         if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         else startForeground(NOTIFICATION_ID, notification)
         Log.i(TAG, "Screen share foreground service started")
+        DiagnosticLog.info("Capture", "Screen share foreground service started")
         if (intent != null) startProjection(intent)
         return START_NOT_STICKY
     }
@@ -34,8 +37,12 @@ class ScreenShareService : Service() {
     private fun startProjection(intent: Intent) {
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         val data = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java) else @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
-        if (resultCode != Activity.RESULT_OK || data == null) return stopSharing()
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            DiagnosticLog.error("Capture", "Screen capture result data is missing")
+            return stopSharing()
+        }
         Log.i(TAG, "Passing full-screen capture permission to WebRTC")
+        DiagnosticLog.info("Capture", "Passing capture permission to WebRTC")
         WebRtcManager.provideScreenCapturePermission(data)
     }
 

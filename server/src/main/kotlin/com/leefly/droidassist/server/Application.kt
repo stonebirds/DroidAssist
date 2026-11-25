@@ -17,6 +17,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.time.Duration.Companion.seconds
 
 private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -47,9 +48,26 @@ internal fun Application.module(database: Database) {
     }
 
     val sockets = ConcurrentHashMap<String, DefaultWebSocketServerSession>()
+    val pendingSignals = ConcurrentHashMap<String, ConcurrentLinkedQueue<String>>()
+    fun queueSignal(deviceId: String, encoded: String) {
+        val queue = pendingSignals.computeIfAbsent(deviceId) { ConcurrentLinkedQueue() }
+        while (queue.size >= 256) queue.poll()
+        queue.offer(encoded)
+        logger.info("Queued signal for offline device {}", deviceId.take(8))
+    }
+    suspend fun deliverSignal(deviceId: String, encoded: String, queueIfOffline: Boolean = true) {
+        val socket = sockets[deviceId]
+        if (socket == null || runCatching { socket.send(Frame.Text(encoded)) }.isFailure) {
+            if (queueIfOffline) queueSignal(deviceId, encoded)
+        }
+    }
     suspend fun sendTo(deviceId: String, sessionId: String, type: SignalType, payload: JsonElement) {
         val signal = SignalEnvelope(sessionId, "server", deviceId, type, payload)
-        sockets[deviceId]?.send(Frame.Text(json.encodeToString(SignalEnvelope.serializer(), signal)))
+        deliverSignal(
+            deviceId,
+            json.encodeToString(SignalEnvelope.serializer(), signal),
+            queueIfOffline = type != SignalType.SESSION_REQUEST,
+        )
     }
     routing {
         get("/health") { call.respond(HealthResponse("ok", System.currentTimeMillis())) }
@@ -126,6 +144,13 @@ internal fun Application.module(database: Database) {
             sockets.put(deviceId, this)?.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnected"))
             database.setOnline(deviceId, true)
             try {
+                pendingSignals.remove(deviceId)?.let { queue ->
+                    while (true) {
+                        val encoded = queue.poll() ?: break
+                        send(Frame.Text(encoded))
+                    }
+                    logger.info("Delivered queued signals to device {}", deviceId.take(8))
+                }
                 database.pendingSession(deviceId)?.let { pending ->
                     sendTo(
                         deviceId,
@@ -138,7 +163,7 @@ internal fun Application.module(database: Database) {
                     if (frame !is Frame.Text) continue
                     val signal = runCatching { json.decodeFromString<SignalEnvelope>(frame.readText()) }.getOrNull() ?: continue
                     if (signal.fromDeviceId != deviceId) continue
-                    sockets[signal.toDeviceId]?.send(Frame.Text(json.encodeToString(SignalEnvelope.serializer(), signal)))
+                    deliverSignal(signal.toDeviceId, json.encodeToString(SignalEnvelope.serializer(), signal))
                 }
             } finally {
                 sockets.remove(deviceId, this)
