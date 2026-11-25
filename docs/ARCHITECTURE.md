@@ -107,7 +107,7 @@ sequenceDiagram
 
 ## 6. 画面与控制
 
-被协助端使用 `ScreenCapturerAndroid` 采集默认显示屏。当前实现保持设备宽高比，把最长边限制为 1280 像素并以 20 fps 请求采集。视频轨道通过 WebRTC 发送，协助端使用 `SurfaceViewRenderer` 渲染并按照远端屏幕宽高比布局。
+被协助端使用 `ScreenCapturerAndroid` 采集默认显示屏。默认以短边 1080p、30 fps 为捕获上限，并把 WebRTC sender 设置为 `BALANCED`，由带宽估计在码率、分辨率和帧率之间自适应。用户也可以选择 720p/1080p 和 10/15/20/30 fps；控制端通过 DataChannel 下发参数，被控端调用 `changeCaptureFormat` 和 `setParameters` 原地切换，无需重连。视频轨道通过 WebRTC 发送，协助端使用 `SurfaceViewRenderer` 渲染并按照远端屏幕宽高比布局。
 
 远控页面把触摸位置归一化到 `0..1` 坐标，DataChannel 发送文本控制命令：
 
@@ -119,6 +119,7 @@ sequenceDiagram
 | `{"type":"global","action":"BACK"}` | 返回 |
 | `{"type":"global","action":"HOME"}` | Home |
 | `{"type":"global","action":"RECENTS"}` | 最近任务 |
+| `{"type":"quality","mode":"adaptive","resolution":1080,"fps":30}` | 调整捕获格式和发送策略 |
 
 被协助端将归一化坐标转换为当前屏幕像素，再通过 `dispatchGesture` 执行。全局按键使用无障碍服务的 `performGlobalAction`。
 
@@ -156,4 +157,4 @@ Android 前台服务被停止时也会触发共享清理。应用 ViewModel 销�
 
 ## 10. 可扩展方向
 
-生产化时建议按优先级加入：自建固定域名和 TLS、coturn 中继、账户与设备所有权体系、一次性挑战签名、服务端限流和审计、会话超时强制关闭、网络质量自适应、后台保活策略、崩溃监控以及自动化真机回归测试。
+生产化时建议按优先级加入：自建固定域名和 TLS、coturn 中继、账户与设备所有权体系、一次性挑战签名、服务端限流和审计、会话超时强制关闭、基于 WebRTC stats 的档位反馈、后台保活策略、崩溃监控以及自动化真机回归测试。

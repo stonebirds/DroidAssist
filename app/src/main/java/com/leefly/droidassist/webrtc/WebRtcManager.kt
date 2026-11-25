@@ -19,7 +19,12 @@ import kotlinx.serialization.json.put
 import org.webrtc.*
 import org.json.JSONObject
 import java.nio.ByteBuffer
-import kotlin.math.max
+
+private data class VideoQuality(
+    val adaptive: Boolean = true,
+    val shortEdge: Int = 1080,
+    val fps: Int = 30,
+)
 
 enum class WebRtcConnectionStatus {
     IDLE,
@@ -42,6 +47,7 @@ object WebRtcManager {
     private var videoSource: VideoSource? = null
     private var localTrack: VideoTrack? = null
     private var remoteTrack: VideoTrack? = null
+    private var videoSender: RtpSender? = null
     private var dataChannel: DataChannel? = null
     private var capturePermission: Intent? = null
     private var sessionId: String? = null
@@ -52,6 +58,8 @@ object WebRtcManager {
     private var iceRestartAttempts = 0
     private val pendingRemoteIceCandidates = mutableListOf<IceCandidate>()
     private var signalSender: ((SignalEnvelope) -> Unit)? = null
+    private var selectedQuality = VideoQuality()
+    private var captureQuality = VideoQuality()
     private val _remoteVideoReady = MutableStateFlow(false)
     val remoteVideoReady: StateFlow<Boolean> = _remoteVideoReady
     private val _remoteAspectRatio = MutableStateFlow(9f / 16f)
@@ -213,6 +221,12 @@ object WebRtcManager {
     )
 
     @Synchronized
+    fun sendVideoQuality(adaptive: Boolean, shortEdge: Int, fps: Int): Boolean {
+        selectedQuality = sanitizedQuality(adaptive, shortEdge, fps)
+        return sendControl(qualityCommand(selectedQuality))
+    }
+
+    @Synchronized
     fun stopScreenCapture() {
         send(SignalType.HANGUP, buildJsonObject {})
         _isScreenSharing.value = false
@@ -255,12 +269,10 @@ object WebRtcManager {
         val helper = SurfaceTextureHelper.create("DroidAssistCapture", eglBase.eglBaseContext)
         val source = factory.createVideoSource(true)
         capturer.initialize(helper, application, source.capturerObserver)
-        val metrics = application.resources.displayMetrics
-        val scale = minOf(1f, 1280f / max(metrics.widthPixels, metrics.heightPixels).toFloat())
-        val width = (metrics.widthPixels * scale).toInt().coerceAtLeast(2) and -2
-        val height = (metrics.heightPixels * scale).toInt().coerceAtLeast(2) and -2
+        val quality = captureQuality
+        val (width, height) = captureDimensions(quality.shortEdge)
         try {
-            capturer.startCapture(width, height, 20)
+            capturer.startCapture(width, height, quality.fps)
         } catch (error: Exception) {
             Log.e(TAG, "Unable to start screen capture", error)
             DiagnosticLog.error("Capture", "Unable to start screen capture", error)
@@ -272,14 +284,19 @@ object WebRtcManager {
             return
         }
         val track = factory.createVideoTrack("droidassist-screen", source)
-        connection.addTrack(track, listOf("droidassist-screen"))
+        videoSender = connection.addTrack(track, listOf("droidassist-screen"))
+        updateSenderParameters(quality)
         bindDataChannel(connection.createDataChannel("control", DataChannel.Init()))
         screenCapturer = capturer
         surfaceTextureHelper = helper
         videoSource = source
         localTrack = track
         _isScreenSharing.value = true
-        DiagnosticLog.info("Capture", "Screen capture started at ${width}x$height, 20 fps")
+        DiagnosticLog.info(
+            "Capture",
+            "Screen capture started at ${width}x$height, ${quality.fps} fps (${qualityLabel(quality)})",
+        )
+        DiagnosticLog.info("Capture", "Protected camera and security surfaces may appear black by Android design")
         createAndSendOffer(connection, iceRestart = false)
     }
 
@@ -398,16 +415,95 @@ object WebRtcManager {
             override fun onBufferedAmountChange(previousAmount: Long) = Unit
             override fun onStateChange() {
                 Log.i(TAG, "Control channel: ${channel.state()}")
+                if (!controlledRole && channel.state() == DataChannel.State.OPEN) {
+                    sendControl(qualityCommand(selectedQuality))
+                }
             }
 
             override fun onMessage(buffer: DataChannel.Buffer) {
                 if (!controlledRole || buffer.binary) return
                 val bytes = ByteArray(buffer.data.remaining())
                 buffer.data.get(bytes)
-                RemoteControlService.execute(bytes.toString(Charsets.UTF_8))
+                val command = bytes.toString(Charsets.UTF_8)
+                val json = runCatching { JSONObject(command) }.getOrNull()
+                if (json?.optString("type") == "quality") {
+                    applyVideoQuality(
+                        adaptive = json.optString("mode") == "adaptive",
+                        shortEdge = json.optInt("resolution", 1080),
+                        fps = json.optInt("fps", 30),
+                    )
+                } else {
+                    RemoteControlService.execute(command)
+                }
             }
         })
     }
+
+    @Synchronized
+    private fun applyVideoQuality(adaptive: Boolean, shortEdge: Int, fps: Int) {
+        val quality = sanitizedQuality(adaptive, shortEdge, fps)
+        captureQuality = quality
+        val capturer = screenCapturer ?: return
+        val (width, height) = captureDimensions(quality.shortEdge)
+        runCatching {
+            capturer.changeCaptureFormat(width, height, quality.fps)
+            updateSenderParameters(quality)
+        }.onSuccess {
+            DiagnosticLog.info(
+                "Capture",
+                "Video quality changed to ${width}x$height, ${quality.fps} fps (${qualityLabel(quality)})",
+            )
+        }.onFailure { error ->
+            DiagnosticLog.error("Capture", "Unable to change video quality", error)
+        }
+    }
+
+    private fun updateSenderParameters(quality: VideoQuality) {
+        val sender = videoSender ?: return
+        val parameters = sender.parameters
+        parameters.degradationPreference = if (quality.adaptive) {
+            RtpParameters.DegradationPreference.BALANCED
+        } else {
+            RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+        }
+        val maxBitrate = when (quality.shortEdge) {
+            720 -> 2_500_000
+            else -> 5_000_000
+        }
+        parameters.encodings.forEach { encoding ->
+            encoding.minBitrateBps = if (quality.adaptive) 250_000 else null
+            encoding.maxBitrateBps = maxBitrate
+            encoding.maxFramerate = quality.fps
+        }
+        if (!sender.setParameters(parameters)) {
+            DiagnosticLog.warn("Capture", "WebRTC rejected updated sender parameters")
+        }
+    }
+
+    private fun captureDimensions(shortEdge: Int): Pair<Int, Int> {
+        val metrics = application.resources.displayMetrics
+        val deviceShortEdge = minOf(metrics.widthPixels, metrics.heightPixels).coerceAtLeast(2)
+        val scale = minOf(1f, shortEdge.toFloat() / deviceShortEdge)
+        val width = ((metrics.widthPixels * scale).toInt().coerceAtLeast(2)) and -2
+        val height = ((metrics.heightPixels * scale).toInt().coerceAtLeast(2)) and -2
+        return width to height
+    }
+
+    private fun sanitizedQuality(adaptive: Boolean, shortEdge: Int, fps: Int) = VideoQuality(
+        adaptive = adaptive,
+        shortEdge = if (shortEdge == 720) 720 else 1080,
+        fps = fps.takeIf { it in setOf(10, 15, 20, 30) } ?: 30,
+    )
+
+    private fun qualityCommand(quality: VideoQuality) = JSONObject()
+        .put("type", "quality")
+        .put("mode", if (quality.adaptive) "adaptive" else "manual")
+        .put("resolution", quality.shortEdge)
+        .put("fps", quality.fps)
+        .toString()
+
+    private fun qualityLabel(quality: VideoQuality): String =
+        if (quality.adaptive) "adaptive" else "manual ${quality.shortEdge}p"
 
     private fun sendControl(command: String): Boolean {
         val channel = dataChannel ?: return false
@@ -427,6 +523,7 @@ object WebRtcManager {
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
+        videoSender = null
         remoteDescriptionSet = false
         pendingRemoteIceCandidates.clear()
         iceRestartAttempts = 0

@@ -44,6 +44,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -650,6 +651,12 @@ private fun RemoteVideo(modifier: Modifier = Modifier) {
 @Composable
 private fun RemoteControlScreen(onClose: () -> Unit) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var adaptiveQuality by rememberSaveable { mutableStateOf(true) }
+    var resolution by rememberSaveable { mutableIntStateOf(1080) }
+    var frameRate by rememberSaveable { mutableIntStateOf(30) }
+    LaunchedEffect(adaptiveQuality, resolution, frameRate) {
+        WebRtcManager.sendVideoQuality(adaptiveQuality, resolution, frameRate)
+    }
     BackHandler {
         if (controlsVisible) controlsVisible = false else onClose()
     }
@@ -683,30 +690,81 @@ private fun RemoteControlScreen(onClose: () -> Unit) {
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
             Column(
-                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Column {
                     Text("远程控制", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                     Text("已连接", color = MaterialTheme.colorScheme.primary)
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton({ WebRtcManager.sendGlobal("BACK") }, Modifier.weight(1f)) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("返回")
-                    }
-                    Button({ WebRtcManager.sendGlobal("HOME") }, Modifier.weight(1f)) {
-                        Icon(Icons.Outlined.Home, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Home")
-                    }
-                    OutlinedButton({ WebRtcManager.sendGlobal("RECENTS") }, Modifier.weight(1f)) {
-                        Icon(Icons.Outlined.Apps, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("任务")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    RemoteControlAction(
+                        label = "返回",
+                        icon = { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null) },
+                        onClick = { WebRtcManager.sendGlobal("BACK") },
+                    )
+                    RemoteControlAction(
+                        label = "主页",
+                        icon = { Icon(Icons.Outlined.Home, contentDescription = null) },
+                        onClick = { WebRtcManager.sendGlobal("HOME") },
+                    )
+                    RemoteControlAction(
+                        label = "任务",
+                        icon = { Icon(Icons.Outlined.Apps, contentDescription = null) },
+                        onClick = { WebRtcManager.sendGlobal("RECENTS") },
+                    )
+                }
+                HorizontalDivider()
+                Text("画面质量", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    listOf(true to "自适应", false to "手动").forEachIndexed { index, item ->
+                        SegmentedButton(
+                            selected = adaptiveQuality == item.first,
+                            onClick = { adaptiveQuality = item.first },
+                            shape = SegmentedButtonDefaults.itemShape(index, 2),
+                        ) {
+                            Text(item.second, maxLines = 1)
+                        }
                     }
                 }
+                Text(
+                    if (adaptiveQuality) "上限 ${resolution}p · ${frameRate} fps · 网络自适应" else "${resolution}p · ${frameRate} fps",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text("分辨率", style = MaterialTheme.typography.labelLarge)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(720, 1080).forEach { value ->
+                        FilterChip(
+                            selected = resolution == value,
+                            onClick = { resolution = value },
+                            label = { Text("${value}p", maxLines = 1) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                Text("帧率", style = MaterialTheme.typography.labelLarge)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(10, 15, 20, 30).forEach { value ->
+                        FilterChip(
+                            selected = frameRate == value,
+                            onClick = { frameRate = value },
+                            label = { Text("$value", maxLines = 1) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                Text(
+                    "相机预览和安全页面受 Android 系统保护时可能显示黑屏",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     TextButton(onClick = { controlsVisible = false }) { Text("收起控制") }
@@ -719,6 +777,29 @@ private fun RemoteControlScreen(onClose: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun RowScope.RemoteControlAction(
+    label: String,
+    icon: @Composable () -> Unit,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.weight(1f),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+            icon()
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
     }
 }
 

@@ -86,9 +86,10 @@ private fun DroidAssistRoot(viewModel: AssistViewModel = viewModel()) {
                 qrScanner.launch(
                     ScanOptions()
                         .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setCaptureActivity(QrScannerActivity::class.java)
                         .setPrompt("扫描电脑页面上的服务器二维码")
                         .setBeepEnabled(false)
-                        .setOrientationLocked(false),
+                        .setOrientationLocked(true),
                 )
             },
             onRegister = viewModel::register,

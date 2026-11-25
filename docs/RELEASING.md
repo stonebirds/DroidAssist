@@ -108,23 +108,23 @@ git diff --check
 确认 `app/build.gradle.kts` 的 `versionCode` 和 `versionName` 已更新，代码已提交并推送，然后创建同版本 tag：
 
 ```bash
-git tag -a v1.1.1 -m "DroidAssist 1.1.1"
-git push origin v1.1.1
+git tag -a v1.1.2 -m "DroidAssist 1.1.2"
+git push origin v1.1.2
 ```
 
 GitHub CLI 登录后上传：
 
 ```bash
-gh release create v1.1.1 \
-  dist/DroidAssist-1.1.1-release.apk \
-  dist/DroidAssist-Server-macOS-arm64-1.1.1.zip \
-  dist/DroidAssist-Server-macOS-x64-1.1.1.zip \
-  dist/DroidAssist-Server-Windows-x64-1.1.1.zip \
+gh release create v1.1.2 \
+  dist/DroidAssist-1.1.2-release.apk \
+  dist/DroidAssist-Server-macOS-arm64-1.1.2.zip \
+  dist/DroidAssist-Server-macOS-x64-1.1.2.zip \
+  dist/DroidAssist-Server-Windows-x64-1.1.2.zip \
   dist/APK-SHA256.txt \
   dist/SHA256SUMS.txt \
   --repo stonebirds/DroidAssist \
-  --title "DroidAssist 1.1.1" \
-  --notes-file docs/releases/v1.1.1.md
+  --title "DroidAssist 1.1.2" \
+  --notes-file docs/releases/v1.1.2.md
 ```
 
 仓库的 `Build release artifacts` workflow 可以在 GitHub Actions 页面手动运行。输入 tag，并选择是否直接发布。自动构建需要配置以下 GitHub Actions Secrets：
