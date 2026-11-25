@@ -11,3 +11,8 @@ captures/
 /data/
 /server/data/
 /releases/
+/dist/
+/.signing/
+*.jks
+*.keystore
+keystore.properties

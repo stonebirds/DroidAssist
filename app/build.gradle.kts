@@ -4,6 +4,25 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val releaseKeystorePath = providers.environmentVariable("DROIDASSIST_KEYSTORE_PATH").orNull
+val releaseStorePassword = providers.environmentVariable("DROIDASSIST_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("DROIDASSIST_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("DROIDASSIST_KEY_PASSWORD").orNull
+val hasReleaseSigning = listOf(
+    releaseKeystorePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
+val releaseBuildRequested = gradle.startParameter.taskNames.any { task ->
+    task.endsWith("assembleRelease", ignoreCase = true) ||
+        task.endsWith("bundleRelease", ignoreCase = true)
+}
+if (releaseBuildRequested && !hasReleaseSigning) {
+    throw GradleException("Release signing environment variables are required; see docs/RELEASING.md")
+}
+
 android {
     namespace = "com.leefly.droidassist"
     compileSdk = 37
@@ -12,14 +31,28 @@ android {
         applicationId = "com.leefly.droidassist"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.0.8"
+        versionCode = 10
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

@@ -1,5 +1,19 @@
 # DroidAssist macOS 部署说明
 
+本文面向需要从源码运行、自定义环境变量或维护服务的技术用户。普通用户请下载 GitHub Release 中内置 Java 和 cloudflared 的 Mac 一键服务包，并阅读 [普通用户快速开始](QUICK_START.md)。
+
+## 0. 一键便携包
+
+Apple 芯片 Mac 使用 `macOS-arm64` 包，Intel Mac 使用 `macOS-x64` 包。完整解压后双击启动、状态或停止 `.command` 文件即可，不要求 Android Studio、JDK、Homebrew 或管理员权限。
+
+便携包数据保存在：
+
+```text
+~/Library/Application Support/DroidAssist
+```
+
+以下章节介绍源码部署和现有 Mac 开发环境维护方式。
+
 ## 1. 部署形态
 
 当前测试环境在一台 Mac 上运行：

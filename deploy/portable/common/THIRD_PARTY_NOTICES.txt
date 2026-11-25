@@ -1,0 +1,24 @@
+DroidAssist portable server third-party notices
+================================================
+
+This package contains software distributed under separate licenses:
+
+1. Azul Zulu / OpenJDK Runtime Environment
+   Project: https://www.azul.com/downloads/
+   License: GNU General Public License, version 2, with the Classpath Exception
+   The runtime's complete legal notices are included in its legal directory.
+
+2. cloudflared
+   Project: https://github.com/cloudflare/cloudflared
+   License: Apache License 2.0
+
+3. Ktor and Kotlin runtime libraries
+   Projects: https://ktor.io/ and https://kotlinlang.org/
+   License: Apache License 2.0
+
+4. SQLite JDBC
+   Project: https://github.com/xerial/sqlite-jdbc
+   License: Apache License 2.0
+
+The DroidAssist source code is distributed under the 0BSD license. See the
+LICENSE file included with this package.

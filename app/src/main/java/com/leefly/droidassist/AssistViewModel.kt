@@ -31,7 +31,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 private val Application.dataStore by preferencesDataStore("droidassist")
 
 data class AssistUiState(
-    val serverUrl: String = "https://celebrities-aggregate-limiting-arrives.trycloudflare.com",
+    val serverUrl: String = "",
     val deviceId: String = "",
     val matchingCode: String = "",
     val recentMatchingCodes: List<String> = emptyList(),
@@ -105,17 +105,28 @@ class AssistViewModel(application: Application) : AndroidViewModel(application) 
 
     fun register() = launchRequest {
         val current = _state.value
+        val normalizedServerUrl = current.serverUrl.trim().trimEnd('/')
+        require(
+            normalizedServerUrl.startsWith("https://") || normalizedServerUrl.startsWith("http://")
+        ) { "请输入以 http:// 或 https:// 开头的服务器地址" }
         val response = api.register(
-            current.serverUrl,
+            normalizedServerUrl,
             DeviceRegistrationRequest(identity.installationId, identity.displayName, identity.publicKey()),
         )
         getApplication<Application>().dataStore.edit {
-            it[serverKey] = current.serverUrl.trim().trimEnd('/')
+            it[serverKey] = normalizedServerUrl
             it[deviceIdKey] = response.deviceId
             it[tokenKey] = response.deviceToken
             it[matchingCodeKey] = response.matchingCode
         }
-        _state.update { it.copy(deviceId = response.deviceId, matchingCode = response.matchingCode, message = "设备已注册") }
+        _state.update {
+            it.copy(
+                serverUrl = normalizedServerUrl,
+                deviceId = response.deviceId,
+                matchingCode = response.matchingCode,
+                message = "设备已注册",
+            )
+        }
         startSignalConnection()
     }
 

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DroidAssist 服务已启动</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f4f6f5; color: #18201e; }
+    main { width: min(760px, calc(100% - 32px)); margin: 40px auto; }
+    header { border-bottom: 1px solid #cbd5d1; padding-bottom: 20px; margin-bottom: 24px; }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0; }
+    h2 { font-size: 18px; margin: 0 0 14px; letter-spacing: 0; }
+    p { line-height: 1.6; }
+    .ok { color: #006a60; font-weight: 700; }
+    .panel { background: white; border: 1px solid #d7dfdc; border-radius: 8px; padding: 20px; margin: 16px 0; }
+    .url-row { display: flex; gap: 10px; align-items: stretch; }
+    input { min-width: 0; flex: 1; border: 1px solid #899390; border-radius: 6px; padding: 11px 12px; font-size: 14px; }
+    button, a.button { border: 0; border-radius: 6px; padding: 11px 16px; background: #006a60; color: white; cursor: pointer; font-weight: 600; text-decoration: none; white-space: nowrap; }
+    .secondary { background: #e4ebe8 !important; color: #18322d !important; }
+    .qr { display: block; width: 220px; height: 220px; margin: 18px auto 6px; border: 1px solid #d7dfdc; }
+    ol { padding-left: 22px; line-height: 1.9; }
+    code { background: #edf1ef; border-radius: 4px; padding: 2px 6px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    .note { color: #56635f; font-size: 14px; }
+    @media (max-width: 600px) { .url-row { flex-direction: column; } main { margin-top: 24px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>DroidAssist 服务</h1>
+      <div class="ok">运行正常</div>
+    </header>
+
+    <section class="panel">
+      <h2>手机服务器地址</h2>
+      <div class="url-row">
+        <input id="server-url" value="__PUBLIC_URL__" readonly>
+        <button type="button" onclick="copyUrl()">复制地址</button>
+      </div>
+      <img class="qr" src="__QR_URL__" alt="服务器地址二维码">
+      <p class="note">二维码由 api.qrserver.com 生成。也可以直接复制上面的地址。</p>
+    </section>
+
+    <section class="panel">
+      <h2>手机端操作</h2>
+      <ol>
+        <li>在两台 Android 手机上安装 DroidAssist APK。</li>
+        <li>打开 DroidAssist 的“设置”页面。</li>
+        <li>把上面的地址填入“服务器地址”，点击“注册本机”。</li>
+        <li>两台手机都显示已注册后，即可创建授权并发起协助。</li>
+      </ol>
+      <div class="actions">
+        <a class="button" href="__PUBLIC_URL__/health" target="_blank" rel="noreferrer">测试公网服务</a>
+        <button class="secondary" type="button" onclick="location.reload()">刷新页面</button>
+      </div>
+    </section>
+
+    <p class="note">关闭此页面不会停止服务。需要停止时，请双击软件目录中的停止脚本。Quick Tunnel 重新建立后地址可能变化。</p>
+  </main>
+  <script>
+    function copyUrl() {
+      const input = document.getElementById('server-url');
+      input.select();
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(input.value);
+      } else {
+        document.execCommand('copy');
+      }
+    }
+  </script>
+</body>
+</html>
